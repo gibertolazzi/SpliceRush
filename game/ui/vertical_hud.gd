@@ -92,8 +92,8 @@ func _draw() -> void:
 	draw_string(font, logo_origin + Vector2(14.0, 42.0), tr(&"GAME_TITLE_TOP"), HORIZONTAL_ALIGNMENT_LEFT, -1, 28, white)
 	draw_string(font, logo_origin + Vector2(22.0, 74.0), tr(&"GAME_TITLE_BOTTOM"), HORIZONTAL_ALIGNMENT_LEFT, -1, 30, magenta)
 
-	# 4. BOTTOM-LEFT: Tutorial Callout ("RUBA I PEZZI!" + 4-Slot Body Diagram)
-	var callout_pos := Vector2(12.0, rect_size.y - 250.0)
+	# 4. BOTTOM-LEFT: Tutorial Callout ("RUBA I PEZZI!" + 4-Slot Body Diagram, above thumb joystick zone)
+	var callout_pos := Vector2(12.0, rect_size.y - 304.0)
 	var header_pts := PackedVector2Array([
 		callout_pos + Vector2(0.0, 8.0),
 		callout_pos + Vector2(104.0, 0.0),

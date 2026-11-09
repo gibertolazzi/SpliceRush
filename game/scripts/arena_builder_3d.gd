@@ -206,15 +206,18 @@ func _build_background_ruins_and_cliffs() -> void:
 	add_child(ruins)
 
 	var ruin_mat := StandardMaterial3D.new()
-	ruin_mat.albedo_color = Color(0.44, 0.34, 0.64)
+	ruin_mat.albedo_color = Color(0.42, 0.32, 0.64)
 	ruin_mat.roughness = 0.85
 
-	# Back fortress wall & towers (-Z)
-	_spawn_box(ruins, Vector3(14.0, 5.5, 2.2), Vector3(0.5, 2.2, -13.5), ruin_mat)
-	_spawn_box(ruins, Vector3(3.4, 8.2, 2.8), Vector3(-5.8, 3.6, -13.0), ruin_mat)
-	_spawn_box(ruins, Vector3(3.6, 7.6, 2.8), Vector3(6.2, 3.2, -12.8), ruin_mat)
-	_spawn_box(ruins, Vector3(2.4, 9.5, 2.4), Vector3(-9.5, 4.2, -11.0), ruin_mat)
-	_spawn_box(ruins, Vector3(2.2, 8.8, 2.2), Vector3(9.6, 3.8, -10.2), ruin_mat)
+	# Stepped fortress battlements (-Z) leaving upper sky (#6B4EFF) open & visible!
+	_spawn_box(ruins, Vector3(11.0, 2.4, 2.0), Vector3(0.5, 0.8, -14.5), ruin_mat)
+	_spawn_box(ruins, Vector3(2.8, 3.8, 2.2), Vector3(-5.2, 1.5, -14.2), ruin_mat)
+	_spawn_box(ruins, Vector3(3.0, 3.6, 2.2), Vector3(5.6, 1.4, -14.0), ruin_mat)
+	# Floating sky islands in upper left & right sky (as in key-art.png)
+	_spawn_box(ruins, Vector3(2.4, 1.6, 2.2), Vector3(-8.2, 5.2, -16.0), ruin_mat, Vector3(6.0, 18.0, -8.0))
+	_spawn_box(ruins, Vector3(2.0, 1.4, 2.0), Vector3(8.4, 5.6, -15.5), ruin_mat, Vector3(-5.0, -15.0, 10.0))
+	# Flying stone block on upper right
+	_spawn_box(ruins, Vector3(0.95, 0.95, 0.95), Vector3(6.8, 4.2, -7.5), _stone_dark_mat, Vector3(22.0, 35.0, -18.0))
 
 	# Glowing Magenta Pixel-Crown Banner on the back ruin wall (key art landmark!)
 	var banner_bg := StandardMaterial3D.new()
@@ -225,18 +228,18 @@ func _build_background_ruins_and_cliffs() -> void:
 	banner_border.albedo_color = Color(1.0, 0.72, 0.98)
 
 	var banner := Node3D.new()
-	banner.position = Vector3(-1.5, 3.6, -11.8)
+	banner.position = Vector3(-0.8, 2.4, -13.2)
 	ruins.add_child(banner)
-	_spawn_box(banner, Vector3(3.2, 2.1, 0.2), Vector3.ZERO, banner_bg)
+	_spawn_box(banner, Vector3(2.8, 1.8, 0.2), Vector3.ZERO, banner_bg)
 	# Pixel Crown inside banner
-	_spawn_box(banner, Vector3(1.6, 0.35, 0.26), Vector3(0.0, -0.35, 0.05), banner_border)
-	_spawn_box(banner, Vector3(0.32, 0.65, 0.26), Vector3(-0.64, 0.08, 0.05), banner_border)
-	_spawn_box(banner, Vector3(0.32, 0.75, 0.26), Vector3(0.0, 0.14, 0.05), banner_border)
-	_spawn_box(banner, Vector3(0.32, 0.65, 0.26), Vector3(0.64, 0.08, 0.05), banner_border)
+	_spawn_box(banner, Vector3(1.4, 0.30, 0.26), Vector3(0.0, -0.30, 0.05), banner_border)
+	_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(-0.56, 0.06, 0.05), banner_border)
+	_spawn_box(banner, Vector3(0.28, 0.65, 0.26), Vector3(0.0, 0.12, 0.05), banner_border)
+	_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(0.56, 0.06, 0.05), banner_border)
 
-	# Side cliffs and floating islands
-	_spawn_box(ruins, Vector3(3.2, 4.5, 18.0), Vector3(-10.2, 0.4, -2.0), _stone_dark_mat)
-	_spawn_box(ruins, Vector3(3.2, 4.5, 18.0), Vector3(10.2, 0.4, -2.0), _stone_dark_mat)
+	# Side cliffs framing arena edges
+	_spawn_box(ruins, Vector3(2.6, 2.2, 16.0), Vector3(-9.8, -0.2, -2.0), _stone_dark_mat)
+	_spawn_box(ruins, Vector3(2.6, 2.2, 16.0), Vector3(9.8, -0.2, -2.0), _stone_dark_mat)
 
 func _build_dust_and_action_accents() -> void:
 	# Warm golden-tan dust clouds near the foreground jump & left impact burst from key art

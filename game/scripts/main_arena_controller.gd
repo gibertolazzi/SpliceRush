@@ -13,10 +13,12 @@ var attack_fx_pool: Array[MeshInstance3D] = []
 var active_attack_fx: Array[Dictionary] = []
 
 var camera_shake_trauma: float = 0.0
+var target_ring_mesh: MeshInstance3D
 var _joystick_vec: Vector2 = Vector2.ZERO
 var _ability_queued: bool = false
 var _frame_counter: int = 0
 var _screenshot_path: String = ""
+var _simulate_input_preview: bool = false
 var _web_first_frame_reported: bool = false
 var _web_first_input_reported: bool = false
 
@@ -26,11 +28,15 @@ func _ready() -> void:
 	_setup_camera()
 	_setup_server_and_world()
 	_setup_ui()
+	if _simulate_input_preview and virtual_joystick != null:
+		virtual_joystick.simulate_drag(Vector2(210.0, 868.0), Vector2(246.0, 832.0))
 
 func _parse_cmdline_args() -> void:
 	for arg: String in OS.get_cmdline_user_args():
 		if arg.begins_with("--capture-screenshot="):
 			_screenshot_path = arg.trim_prefix("--capture-screenshot=")
+		elif arg == "--simulate-input":
+			_simulate_input_preview = true
 
 func _setup_environment_and_lights() -> void:
 	var we := WorldEnvironment.new()
@@ -74,7 +80,7 @@ func _setup_camera() -> void:
 	camera.fov = balance.camera_fov_deg
 	camera.near = 0.2
 	camera.far = 95.0
-	camera.position = Vector3(0.0, 7.4, 10.6)
+	camera.position = Vector3(0.0, 5.8, 10.4)
 	camera.rotation_degrees = Vector3(balance.camera_pitch_deg, 0.0, 0.0)
 	add_child(camera)
 	camera.make_current()
@@ -115,6 +121,21 @@ func _setup_server_and_world() -> void:
 		fx.visible = false
 		add_child(fx)
 		attack_fx_pool.append(fx)
+
+	target_ring_mesh = MeshInstance3D.new()
+	target_ring_mesh.name = "TargetLockRing"
+	var ring_cyl := CylinderMesh.new()
+	ring_cyl.top_radius = 0.92
+	ring_cyl.bottom_radius = 0.98
+	ring_cyl.height = 0.05
+	ring_cyl.radial_segments = 16
+	target_ring_mesh.mesh = ring_cyl
+	var ring_mat := StandardMaterial3D.new()
+	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring_mat.albedo_color = Color(1.0, 0.18, 0.58)
+	target_ring_mesh.material_override = ring_mat
+	target_ring_mesh.visible = false
+	add_child(target_ring_mesh)
 
 	server.state_ticked.connect(_on_server_state_ticked)
 	server.attack_performed.connect(_on_server_attack_performed)
@@ -168,6 +189,7 @@ func _process(delta: float) -> void:
 		fn.update_visual_state(interp_xz, c.vel, c.facing_angle, c.attack_anim_timer, c.hurt_anim_timer, c.alive, delta)
 
 	_update_camera_follow(delta)
+	_update_target_ring()
 	arena_builder.update_arena_vfx(delta)
 	_update_attack_fx(delta)
 
@@ -180,9 +202,9 @@ func _update_camera_follow(dt: float) -> void:
 	if server.combatants.is_empty():
 		return
 	var player_state: MatchServer.CombatantState = server.combatants[0]
-	var target_x: float = clampf(player_state.pos.x * 0.55, -3.5, 3.5)
+	var target_x: float = clampf(player_state.pos.x * 0.45, -3.2, 3.2)
 	var target_z: float = clampf(player_state.pos.y + balance.camera_z_bias, 4.5, 13.5)
-	var desired := Vector3(target_x, 7.4, target_z)
+	var desired := Vector3(target_x, 5.8, target_z)
 	var t: float = 1.0 - exp(-balance.camera_smooth_rate * dt)
 	var base_cam_pos: Vector3 = camera.position.lerp(desired, t)
 
@@ -194,6 +216,17 @@ func _update_camera_follow(dt: float) -> void:
 
 	camera.position = base_cam_pos + shake_off
 	camera.rotation_degrees = Vector3(balance.camera_pitch_deg, 0.0, 0.0)
+
+func _update_target_ring() -> void:
+	if target_ring_mesh == null or server == null:
+		return
+	var nearest: MatchServer.CombatantState = server.find_nearest_enemy(0, balance.auto_attack_range * 1.35)
+	if nearest != null and nearest.alive:
+		target_ring_mesh.visible = true
+		target_ring_mesh.position = Vector3(nearest.pos.x, 0.06, nearest.pos.y)
+		target_ring_mesh.rotate_y(0.05)
+	else:
+		target_ring_mesh.visible = false
 
 func _on_server_state_ticked(time_left: float) -> void:
 	if hud != null:

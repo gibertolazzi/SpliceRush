@@ -134,6 +134,17 @@ func _build_rig() -> void:
 		laser_beam.rotation_degrees = Vector3(0.0, -14.0, -8.0)
 		laser_beam.material_override = _make_unshaded_mat(Color(1.0, 0.25, 0.18))
 		head_socket.add_child(laser_beam)
+	elif fighter_id == 1:
+		# Red fighter on left: knocked-out white eye visor with X X eyes & open mouth + flying detached arm!
+		_add_box(head_socket, Vector3(0.64, 0.26, 0.84), Vector3(0.0, 0.10, 0.0), _make_unshaded_mat(Color(0.96, 0.96, 0.98)))
+		_add_box(head_socket, Vector3(0.18, 0.06, 0.87), Vector3(-0.16, 0.10, 0.0), dark_mat, Vector3(0.0, 0.0, 42.0))
+		_add_box(head_socket, Vector3(0.18, 0.06, 0.87), Vector3(-0.16, 0.10, 0.0), dark_mat, Vector3(0.0, 0.0, -42.0))
+		_add_box(head_socket, Vector3(0.18, 0.06, 0.87), Vector3(0.16, 0.10, 0.0), dark_mat, Vector3(0.0, 0.0, 42.0))
+		_add_box(head_socket, Vector3(0.18, 0.06, 0.87), Vector3(0.16, 0.10, 0.0), dark_mat, Vector3(0.0, 0.0, -42.0))
+		_add_box(head_socket, Vector3(0.42, 0.20, 0.85), Vector3(0.0, -0.20, 0.0), dark_mat)
+		# Detached flying arm piece next to Red fighter (key art moment!)
+		var flying_arm: MeshInstance3D = _add_box(pivot, Vector3(0.75, 0.34, 0.34), Vector3(-1.35, 2.05, 0.15), _make_toon_mat(Color(0.90, 0.84, 0.80), 0.04), Vector3(15.0, -18.0, 32.0))
+		_add_box(flying_arm, Vector3(0.24, 0.38, 0.38), Vector3(0.32, 0.0, 0.0), _make_toon_mat(Color(0.42, 0.18, 0.62), 0.04))
 	elif fighter_id == 2 or fighter_id == 5:
 		# Cool dark visor sunglasses (Blue bot in key art)
 		_add_box(head_socket, Vector3(0.90, 0.26, 0.86), Vector3(0.0, 0.10, 0.0), dark_mat)
@@ -167,7 +178,11 @@ func _build_rig() -> void:
 		var blade_mat: ShaderMaterial = _make_toon_mat(Color(0.74, 0.78, 0.84), 0.06)
 		_add_box(left_arm_socket, Vector3(0.46, 0.48, 0.46), Vector3(-0.18, -0.06, 0.0), skin_mat)
 		_add_box(left_arm_socket, Vector3(0.62, 0.54, 0.82), Vector3(-0.48, -0.32, -0.18), orange_mat, Vector3(-16.0, 18.0, 22.0))
-		_add_box(left_arm_socket, Vector3(0.18, 0.42, 1.48), Vector3(-0.92, -0.58, -0.62), blade_mat, Vector3(-16.0, 18.0, 22.0))
+		var saw_blade: MeshInstance3D = _add_box(left_arm_socket, Vector3(0.18, 0.42, 1.48), Vector3(-0.92, -0.58, -0.62), blade_mat, Vector3(-16.0, 18.0, 22.0))
+		for t_idx: int in range(4):
+			var tz: float = -0.52 + float(t_idx) * 0.34
+			_add_box(saw_blade, Vector3(0.20, 0.10, 0.12), Vector3(0.0, -0.24, tz), dark_mat)
+			_add_box(saw_blade, Vector3(0.20, 0.10, 0.12), Vector3(0.0, 0.24, tz), dark_mat)
 	else:
 		# Oversized chunky arms and fists
 		_add_box(left_arm_socket, Vector3(0.38, 0.58, 0.38), Vector3(-0.12, -0.22, 0.0), body_mat)
@@ -238,10 +253,12 @@ func update_visual_state(
 		return
 	global_position = Vector3(interp_xz.x, 0.0, interp_xz.y)
 
-	# Convert 2D XZ angle to 3D Y-rotation; keep Player 0 angled so chest crown & chainsaw read clearly
+	# Convert 2D XZ angle to 3D Y-rotation; keep Player 0 in a 3/4 front-facing brawler stance so silhouette & parts stay 100% readable
 	var target_yaw: float = -facing_rad + PI * 0.5
-	if fighter_id == 0 and vel_xz.length_squared() < 0.05:
-		pivot.rotation.y = lerp_angle(pivot.rotation.y, deg_to_rad(155.0), minf(1.0, 10.0 * dt))
+	if fighter_id == 0:
+		var strafe_tilt: float = clampf(vel_xz.x / 7.0, -1.0, 1.0)
+		var hero_yaw: float = deg_to_rad(158.0 - strafe_tilt * 16.0)
+		pivot.rotation.y = lerp_angle(pivot.rotation.y, hero_yaw, minf(1.0, 10.0 * dt))
 	else:
 		pivot.rotation.y = lerp_angle(pivot.rotation.y, target_yaw, minf(1.0, 12.0 * dt))
 
