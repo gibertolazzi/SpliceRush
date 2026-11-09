@@ -1,0 +1,38 @@
+[gd_resource type="Resource" script_class="BalanceConfig" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://shared/balance_config.gd" id="1_balance"]
+
+[resource]
+script = ExtResource("1_balance")
+match_duration_sec = 90.0
+frenzy_start_sec = 60.0
+power_part_interval_sec = 25.0
+respawn_delay_sec = 3.0
+max_combatants = 12
+server_tick_hz = 30
+clip_log_window_sec = 15.0
+grid_width = 16
+grid_depth = 22
+tile_size = 1.5
+destructible_block_hp = 45
+hazard_damage_per_sec = 15.0
+hazard_knockback = 7.0
+base_move_speed = 7.2
+acceleration = 42.0
+friction = 34.0
+collision_radius = 0.58
+dash_impulse = 14.0
+dash_cooldown_sec = 2.8
+max_hp = 100
+auto_attack_range = 2.85
+auto_attack_cooldown_sec = 0.55
+auto_attack_damage = 18
+auto_attack_knockback = 5.5
+attack_arc_dot_threshold = -1.0
+joystick_deadzone = 0.16
+joystick_max_radius_px = 68.0
+camera_pitch_deg = -35.0
+camera_fov_deg = 54.0
+camera_distance = 11.5
+camera_z_bias = 6.2
+camera_smooth_rate = 9.0
