@@ -5,6 +5,7 @@ const HAZARD_SHADER := preload("res://game/shaders/hazard_stripes.gdshader")
 const BEAM_SHADER := preload("res://game/shaders/power_beam.gdshader")
 
 var destructible_nodes: Dictionary = {} # Vector2i -> Node3D
+var dropped_part_nodes: Dictionary = {} # int (drop_id) -> Node3D
 var power_cube_node: Node3D
 var debris_pool: Array[MeshInstance3D] = []
 var active_debris: Array[Dictionary] = []
@@ -14,6 +15,7 @@ var _stone_mat_b: StandardMaterial3D
 var _stone_dark_mat: StandardMaterial3D
 var _gold_glow_mat: StandardMaterial3D
 var _white_glow_mat: StandardMaterial3D
+var _rarity_mats: Dictionary = {}
 
 func _ready() -> void:
 	_init_materials()
@@ -39,10 +41,19 @@ func _init_materials() -> void:
 	_white_glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_white_glow_mat.albedo_color = Color(1.0, 0.96, 0.82)
 
+	for r: int in [PartData.Rarity.COMMON, PartData.Rarity.RARE, PartData.Rarity.EPIC, PartData.Rarity.LEGENDARY]:
+		var rmat := StandardMaterial3D.new()
+		rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		rmat.albedo_color = PartCatalog.get_rarity_color(r as PartData.Rarity)
+		_rarity_mats[r] = rmat
+
 func build_from_server(server: MatchServer) -> void:
+	if _stone_mat_a == null:
+		_init_materials()
 	for child: Node in get_children():
 		child.queue_free()
 	destructible_nodes.clear()
+	dropped_part_nodes.clear()
 	active_debris.clear()
 	debris_pool.clear()
 
@@ -54,8 +65,88 @@ func build_from_server(server: MatchServer) -> void:
 	_build_dust_and_action_accents()
 	_init_debris_pool()
 
+	for drop: MatchServer.DroppedPartState in server.dropped_parts:
+		spawn_dropped_part_visual(drop.id, drop.part_id, int(drop.slot), int(drop.rarity), drop.pos, drop.is_power_part)
+
+func spawn_dropped_part_visual(drop_id: int, part_id: StringName, slot: int, rarity: int, pos_xz: Vector2, _is_power: bool) -> void:
+	if _stone_mat_a == null:
+		_init_materials()
+	if dropped_part_nodes.has(drop_id):
+		return
+	var root_n := Node3D.new()
+	root_n.name = "Drop_%d" % drop_id
+	root_n.position = Vector3(pos_xz.x, 0.0, pos_xz.y)
+	add_child(root_n)
+
+	var r_mat: StandardMaterial3D = _rarity_mats.get(rarity, _gold_glow_mat) as StandardMaterial3D
+	var pdata: PartData = PartCatalog.get_part(part_id)
+	var prim_mat := StandardMaterial3D.new()
+	prim_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	prim_mat.albedo_color = pdata.primary_color
+
+	# Rarity Base Shape + Vertical Beacon (Rule 9: shape + glow, not just color)
+	match rarity:
+		PartData.Rarity.COMMON:
+			_spawn_box(root_n, Vector3(0.62, 0.06, 0.62), Vector3(0.0, 0.05, 0.0), r_mat)
+		PartData.Rarity.RARE:
+			# Rotated diamond pad + medium beacon
+			_spawn_box(root_n, Vector3(0.76, 0.07, 0.76), Vector3(0.0, 0.05, 0.0), r_mat, Vector3(0.0, 45.0, 0.0))
+			_spawn_box(root_n, Vector3(0.10, 1.35, 0.10), Vector3(0.0, 0.72, 0.0), r_mat)
+		PartData.Rarity.EPIC:
+			# Crossed 8-point star pad + twin beacon
+			_spawn_box(root_n, Vector3(0.84, 0.08, 0.84), Vector3(0.0, 0.05, 0.0), r_mat)
+			_spawn_box(root_n, Vector3(0.84, 0.08, 0.84), Vector3(0.0, 0.06, 0.0), r_mat, Vector3(0.0, 45.0, 0.0))
+			_spawn_box(root_n, Vector3(0.14, 1.85, 0.14), Vector3(0.0, 0.95, 0.0), r_mat)
+		PartData.Rarity.LEGENDARY:
+			# Crowned pedestal pad + tall golden pillar
+			_spawn_box(root_n, Vector3(0.96, 0.09, 0.96), Vector3(0.0, 0.05, 0.0), r_mat)
+			_spawn_box(root_n, Vector3(0.96, 0.09, 0.96), Vector3(0.0, 0.07, 0.0), _white_glow_mat, Vector3(0.0, 45.0, 0.0))
+			_spawn_box(root_n, Vector3(0.18, 2.55, 0.18), Vector3(0.0, 1.30, 0.0), r_mat)
+
+	# Floating Slot-Specific 3D Part Mesh
+	var item_pivot := Node3D.new()
+	item_pivot.name = "ItemMesh"
+	item_pivot.position = Vector3(0.0, 0.68, 0.0)
+	root_n.add_child(item_pivot)
+
+	match slot:
+		PartData.Slot.HEAD:
+			_spawn_box(item_pivot, Vector3(0.50, 0.48, 0.48), Vector3.ZERO, prim_mat)
+			_spawn_box(item_pivot, Vector3(0.54, 0.16, 0.52), Vector3(0.0, 0.06, 0.0), r_mat)
+		PartData.Slot.ARMS:
+			_spawn_box(item_pivot, Vector3(0.56, 0.42, 0.42), Vector3(-0.06, 0.0, 0.0), prim_mat, Vector3(0.0, 0.0, 18.0))
+			_spawn_box(item_pivot, Vector3(0.24, 0.28, 0.62), Vector3(0.24, 0.0, 0.0), r_mat)
+		PartData.Slot.LEGS:
+			_spawn_box(item_pivot, Vector3(0.36, 0.52, 0.36), Vector3(0.0, 0.06, 0.0), prim_mat)
+			_spawn_box(item_pivot, Vector3(0.46, 0.20, 0.52), Vector3(0.0, -0.20, 0.06), r_mat)
+		PartData.Slot.CORE:
+			_spawn_box(item_pivot, Vector3(0.48, 0.48, 0.24), Vector3.ZERO, r_mat, Vector3(0.0, 0.0, 45.0))
+			_spawn_box(item_pivot, Vector3(0.28, 0.28, 0.30), Vector3.ZERO, _white_glow_mat)
+
+	dropped_part_nodes[drop_id] = root_n
+
+func remove_dropped_part_visual(drop_id: int, pos_xz: Vector2) -> void:
+	spawn_impact_debris(pos_xz, 4)
+	if dropped_part_nodes.has(drop_id):
+		var n: Node3D = dropped_part_nodes[drop_id]
+		if is_instance_valid(n):
+			n.queue_free()
+		dropped_part_nodes.erase(drop_id)
+
+func sync_dropped_parts(drops: Array[MatchServer.DroppedPartState], dt: float) -> void:
+	var t_sec: float = float(Time.get_ticks_msec()) * 0.004
+	for drop: MatchServer.DroppedPartState in drops:
+		if not dropped_part_nodes.has(drop.id):
+			spawn_dropped_part_visual(drop.id, drop.part_id, int(drop.slot), int(drop.rarity), drop.pos, drop.is_power_part)
+		var n: Node3D = dropped_part_nodes[drop.id]
+		if is_instance_valid(n):
+			n.position = Vector3(drop.pos.x, 0.0, drop.pos.y)
+			var item_mesh: Node3D = n.get_node_or_null("ItemMesh") as Node3D
+			if item_mesh != null:
+				item_mesh.rotate_y(2.6 * dt)
+				item_mesh.position.y = 0.66 + sin(t_sec + float(drop.id)) * 0.14
+
 func _build_floor_multimesh(server: MatchServer, tile: float) -> void:
-	# Sub-base dark slab for cracks between tiles
 	var base_mi := MeshInstance3D.new()
 	var base_box := BoxMesh.new()
 	base_box.size = Vector3(float(server.balance.grid_width) * tile + 1.2, 1.4, float(server.balance.grid_depth) * tile + 1.2)
@@ -137,7 +228,6 @@ func _build_power_pedestal(pos: Vector3) -> void:
 	ped.position = pos
 	add_child(ped)
 
-	# Hexagonal/stepped golden-purple base
 	var cyl_outer := MeshInstance3D.new()
 	var cm_outer := CylinderMesh.new()
 	cm_outer.top_radius = 2.1
@@ -160,14 +250,12 @@ func _build_power_pedestal(pos: Vector3) -> void:
 	cyl_gold.material_override = _gold_glow_mat
 	ped.add_child(cyl_gold)
 
-	# Glowing "?" Power Part Cube
 	power_cube_node = Node3D.new()
 	power_cube_node.position = Vector3(0.0, 1.45, 0.0)
 	ped.add_child(power_cube_node)
 	_spawn_box(power_cube_node, Vector3(1.38, 1.38, 1.38), Vector3.ZERO, _gold_glow_mat)
 	_build_question_mark(power_cube_node, Vector3(0.0, 0.0, 0.72), 0.82, _white_glow_mat)
 
-	# Vertical Golden Light Beam
 	var beam_mat := ShaderMaterial.new()
 	beam_mat.shader = BEAM_SHADER
 	var beam_mi := MeshInstance3D.new()
@@ -181,7 +269,6 @@ func _build_power_pedestal(pos: Vector3) -> void:
 	beam_mi.material_override = beam_mat
 	ped.add_child(beam_mi)
 
-	# Warm golden point light for bounce lighting on stone slabs
 	var omni := OmniLight3D.new()
 	omni.light_color = Color(1.0, 0.76, 0.24)
 	omni.light_energy = 2.8
@@ -209,17 +296,13 @@ func _build_background_ruins_and_cliffs() -> void:
 	ruin_mat.albedo_color = Color(0.42, 0.32, 0.64)
 	ruin_mat.roughness = 0.85
 
-	# Stepped fortress battlements (-Z) leaving upper sky (#6B4EFF) open & visible!
 	_spawn_box(ruins, Vector3(11.0, 2.4, 2.0), Vector3(0.5, 0.8, -14.5), ruin_mat)
 	_spawn_box(ruins, Vector3(2.8, 3.8, 2.2), Vector3(-5.2, 1.5, -14.2), ruin_mat)
 	_spawn_box(ruins, Vector3(3.0, 3.6, 2.2), Vector3(5.6, 1.4, -14.0), ruin_mat)
-	# Floating sky islands in upper left & right sky (as in key-art.png)
 	_spawn_box(ruins, Vector3(2.4, 1.6, 2.2), Vector3(-8.2, 5.2, -16.0), ruin_mat, Vector3(6.0, 18.0, -8.0))
 	_spawn_box(ruins, Vector3(2.0, 1.4, 2.0), Vector3(8.4, 5.6, -15.5), ruin_mat, Vector3(-5.0, -15.0, 10.0))
-	# Flying stone block on upper right
 	_spawn_box(ruins, Vector3(0.95, 0.95, 0.95), Vector3(6.8, 4.2, -7.5), _stone_dark_mat, Vector3(22.0, 35.0, -18.0))
 
-	# Glowing Magenta Pixel-Crown Banner on the back ruin wall (key art landmark!)
 	var banner_bg := StandardMaterial3D.new()
 	banner_bg.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	banner_bg.albedo_color = Color(0.86, 0.34, 0.92)
@@ -231,18 +314,15 @@ func _build_background_ruins_and_cliffs() -> void:
 	banner.position = Vector3(-0.8, 2.4, -13.2)
 	ruins.add_child(banner)
 	_spawn_box(banner, Vector3(2.8, 1.8, 0.2), Vector3.ZERO, banner_bg)
-	# Pixel Crown inside banner
 	_spawn_box(banner, Vector3(1.4, 0.30, 0.26), Vector3(0.0, -0.30, 0.05), banner_border)
 	_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(-0.56, 0.06, 0.05), banner_border)
 	_spawn_box(banner, Vector3(0.28, 0.65, 0.26), Vector3(0.0, 0.12, 0.05), banner_border)
 	_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(0.56, 0.06, 0.05), banner_border)
 
-	# Side cliffs framing arena edges
 	_spawn_box(ruins, Vector3(2.6, 2.2, 16.0), Vector3(-9.8, -0.2, -2.0), _stone_dark_mat)
 	_spawn_box(ruins, Vector3(2.6, 2.2, 16.0), Vector3(9.8, -0.2, -2.0), _stone_dark_mat)
 
 func _build_dust_and_action_accents() -> void:
-	# Warm golden-tan dust clouds near the foreground jump & left impact burst from key art
 	var dust_mat := StandardMaterial3D.new()
 	dust_mat.albedo_color = Color(0.76, 0.56, 0.44)
 	dust_mat.roughness = 0.92
@@ -257,7 +337,6 @@ func _build_dust_and_action_accents() -> void:
 		var s: float = 0.48 + float(i % 3) * 0.16
 		_spawn_box(self, Vector3(s, s * 0.68, s), dust_positions[i], dust_mat, Vector3(15.0 * float(i), 25.0 * float(i), 10.0))
 
-	# Impact star burst under fighter 1 (left side)
 	var impact := Node3D.new()
 	impact.position = Vector3(-2.6, 1.0, -0.2)
 	add_child(impact)

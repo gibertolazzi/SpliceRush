@@ -80,7 +80,7 @@ func _setup_camera() -> void:
 	camera.fov = balance.camera_fov_deg
 	camera.near = 0.2
 	camera.far = 95.0
-	camera.position = Vector3(0.0, 5.8, 10.4)
+	camera.position = Vector3(0.0, 6.8, 11.0)
 	camera.rotation_degrees = Vector3(balance.camera_pitch_deg, 0.0, 0.0)
 	add_child(camera)
 	camera.make_current()
@@ -89,7 +89,6 @@ func _setup_server_and_world() -> void:
 	server = MatchServer.new()
 	server.name = "MatchServer"
 	server.balance = balance
-	# For initial framing screenshot, pause bots only if --static-preview is passed
 	for arg: String in OS.get_cmdline_user_args():
 		if arg == "--static-preview":
 			server.bots_enabled = false
@@ -105,7 +104,7 @@ func _setup_server_and_world() -> void:
 		var fn := BlockyFighter3D.new()
 		fn.name = "Fighter_%d" % c.id
 		add_child(fn)
-		fn.setup_fighter(c.id, c.is_bot, c.base_color, c.shape_id)
+		fn.setup_fighter(c.id, c.is_bot, c.base_color, c.shape_id, c.slots, c.is_abomination)
 		fn.update_visual_state(c.pos, c.vel, c.facing_angle, 0.0, 0.0, c.alive, 0.016)
 		fighter_nodes.append(fn)
 
@@ -140,6 +139,9 @@ func _setup_server_and_world() -> void:
 	server.state_ticked.connect(_on_server_state_ticked)
 	server.attack_performed.connect(_on_server_attack_performed)
 	server.block_damaged.connect(_on_server_block_damaged)
+	server.part_dropped.connect(_on_server_part_dropped)
+	server.part_picked_up.connect(_on_server_part_picked_up)
+	server.combatant_slots_changed.connect(_on_server_combatant_slots_changed)
 
 func _setup_ui() -> void:
 	var layer := CanvasLayer.new()
@@ -157,6 +159,9 @@ func _setup_ui() -> void:
 	hud = VerticalHUD.new()
 	hud.name = "VerticalHUD"
 	layer.add_child(hud)
+	if not server.combatants.is_empty():
+		var p0: MatchServer.CombatantState = server.combatants[0]
+		hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)
 
 func _on_joystick_updated(vec: Vector2) -> void:
 	_joystick_vec = vec
@@ -190,6 +195,7 @@ func _process(delta: float) -> void:
 
 	_update_camera_follow(delta)
 	_update_target_ring()
+	arena_builder.sync_dropped_parts(server.dropped_parts, delta)
 	arena_builder.update_arena_vfx(delta)
 	_update_attack_fx(delta)
 
@@ -204,7 +210,7 @@ func _update_camera_follow(dt: float) -> void:
 	var player_state: MatchServer.CombatantState = server.combatants[0]
 	var target_x: float = clampf(player_state.pos.x * 0.45, -3.2, 3.2)
 	var target_z: float = clampf(player_state.pos.y + balance.camera_z_bias, 4.5, 13.5)
-	var desired := Vector3(target_x, 5.8, target_z)
+	var desired := Vector3(target_x, 6.8, target_z)
 	var t: float = 1.0 - exp(-balance.camera_smooth_rate * dt)
 	var base_cam_pos: Vector3 = camera.position.lerp(desired, t)
 
@@ -251,6 +257,22 @@ func _on_server_attack_performed(attacker_id: int, _target_id: int, from_xz: Vec
 
 func _on_server_block_damaged(cell: Vector2i, remaining_hp: int, destroyed: bool, world_xz: Vector2) -> void:
 	arena_builder.on_block_damaged(cell, remaining_hp, destroyed, world_xz)
+
+func _on_server_part_dropped(drop_id: int, part_id: StringName, slot: int, rarity: int, pos_xz: Vector2, is_power: bool) -> void:
+	arena_builder.spawn_dropped_part_visual(drop_id, part_id, slot, rarity, pos_xz, is_power)
+
+func _on_server_part_picked_up(drop_id: int, collector_id: int, part_id: StringName, _slot: int, _rarity: int, pos_xz: Vector2) -> void:
+	arena_builder.remove_dropped_part_visual(drop_id, pos_xz)
+	if collector_id == 0:
+		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.45)
+		if hud != null:
+			hud.show_part_stolen_toast(part_id)
+
+func _on_server_combatant_slots_changed(combatant_id: int, slots: Dictionary, is_abomination: bool, total_mass: int) -> void:
+	if combatant_id >= 0 and combatant_id < fighter_nodes.size():
+		fighter_nodes[combatant_id].apply_slots(slots, is_abomination, true)
+	if combatant_id == 0 and hud != null:
+		hud.on_player_slots_updated(slots, is_abomination, total_mass)
 
 func _update_attack_fx(dt: float) -> void:
 	var idx: int = active_attack_fx.size() - 1
