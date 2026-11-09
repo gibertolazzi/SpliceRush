@@ -9,12 +9,24 @@ signal part_dropped(drop_id: int, part_id: StringName, slot: int, rarity: int, p
 signal part_picked_up(drop_id: int, collector_id: int, part_id: StringName, slot: int, rarity: int, pos_xz: Vector2)
 signal combatant_slots_changed(combatant_id: int, slots: Dictionary, is_abomination: bool, total_mass: int)
 signal abomination_changed(combatant_id: int, active: bool, pos_xz: Vector2)
+signal frenzy_started()
+signal arena_ring_collapsed(ring_index: int, collapsed_cells: Array[Vector2i], safe_bounds_xz: Vector2)
+signal match_ended(leaderboard: Array[Dictionary], player_rank: int)
+signal match_restarted()
 
 enum CellType {
+	VOID = -1,
 	FLOOR = 0,
 	DESTRUCTIBLE_BLOCK = 1,
 	HAZARD_BARRIER = 2,
 	POWER_PEDESTAL = 3,
+}
+
+enum MatchPhase {
+	SPAWN = 0,
+	COMBAT = 1,
+	FRENZY = 2,
+	RESULT = 3,
 }
 
 class DroppedPartState extends RefCounted:
@@ -55,6 +67,7 @@ class CombatantState extends RefCounted:
 	var cooldown_mult: float = 1.0
 	var range_mult: float = 1.0
 	var pickup_mult: float = 1.0
+	var last_ai_action: StringName = &"attack_nearest"
 	var base_color: Color = Color.WHITE
 	var shape_id: int = 0
 	var slots: Dictionary = {
@@ -85,6 +98,9 @@ const PEDESTAL_WORLD_XZ := Vector2(2.2, -4.8)
 @export var bots_enabled: bool = true
 
 var match_elapsed_sec: float = 43.0 # Starts at 00:47 remaining by default for visual parity, resettable
+var match_phase: MatchPhase = MatchPhase.COMBAT
+var collapsed_rings_count: int = 0
+var result_timer_sec: float = 0.0
 var combatants: Array[CombatantState] = []
 var dropped_parts: Array[DroppedPartState] = []
 var grid_cells: Dictionary = {} # Vector2i -> int (CellType)
@@ -93,6 +109,7 @@ var event_log: Array[Dictionary] = []
 
 var _next_drop_id: int = 1
 var _power_part_timer: float = 0.0
+var _frenzy_collapse_timer: float = 0.0
 var _tick_accumulator: float = 0.0
 var _rng := RandomNumberGenerator.new()
 
@@ -100,9 +117,44 @@ func _ready() -> void:
 	_rng.seed = 20261109
 	if balance == null:
 		balance = BalanceConfig.new()
+	start_new_match(43.0, false)
+
+func start_new_match(initial_elapsed_sec: float = 0.0, emit_restart: bool = true) -> void:
+	match_elapsed_sec = initial_elapsed_sec
+	collapsed_rings_count = 0
+	result_timer_sec = 0.0
+	_frenzy_collapse_timer = balance.frenzy_collapse_interval_sec
+	match_phase = _compute_phase_for_time(match_elapsed_sec)
+	event_log.clear()
 	setup_arena_grid()
 	spawn_all_combatants()
 	_spawn_initial_arena_drops()
+	if emit_restart:
+		match_restarted.emit()
+	state_ticked.emit(get_time_remaining())
+
+func request_rematch() -> void:
+	start_new_match(0.0, true)
+
+func _compute_phase_for_time(t: float) -> MatchPhase:
+	if t >= balance.match_duration_sec:
+		return MatchPhase.RESULT
+	if t >= balance.frenzy_start_sec:
+		return MatchPhase.FRENZY
+	if t < 5.0:
+		return MatchPhase.SPAWN
+	return MatchPhase.COMBAT
+
+func is_frenzy_active() -> bool:
+	return match_phase == MatchPhase.FRENZY
+
+func get_power_part_timer() -> float:
+	return _power_part_timer
+
+func get_safe_bounds_xz() -> Vector2:
+	var eff_hw: float = maxf(4.0, float(balance.grid_width) * 0.5 - float(collapsed_rings_count) - 0.8)
+	var eff_hd: float = maxf(5.0, float(balance.grid_depth) * 0.5 - float(collapsed_rings_count) - 0.8)
+	return Vector2(eff_hw * balance.tile_size, eff_hd * balance.tile_size)
 
 func setup_arena_grid() -> void:
 	grid_cells.clear()
@@ -114,7 +166,6 @@ func setup_arena_grid() -> void:
 			var cell := Vector2i(gx, gz)
 			grid_cells[cell] = CellType.FLOOR
 
-	# Center Power Part pedestal (around (2, -3) in key-art composition)
 	var ped_cells: Array[Vector2i] = [
 		Vector2i(1, -4), Vector2i(2, -4),
 		Vector2i(1, -3), Vector2i(2, -3),
@@ -122,7 +173,6 @@ func setup_arena_grid() -> void:
 	for pc: Vector2i in ped_cells:
 		grid_cells[pc] = CellType.POWER_PEDESTAL
 
-	# Hazard barriers (yellow-black stripes as seen in key art left-back and right-mid)
 	var hazard_coords: Array[Vector2i] = [
 		Vector2i(-2, -5), Vector2i(-1, -5),
 		Vector2i(5, -2), Vector2i(5, -1),
@@ -131,7 +181,6 @@ func setup_arena_grid() -> void:
 	for hc: Vector2i in hazard_coords:
 		grid_cells[hc] = CellType.HAZARD_BARRIER
 
-	# Destructible stone blocks around the arena perimeter and tactical clusters
 	var destructible_coords: Array[Vector2i] = [
 		Vector2i(-5, -2), Vector2i(-4, -2),
 		Vector2i(4, -5), Vector2i(5, -5),
@@ -158,11 +207,10 @@ func spawn_all_combatants() -> void:
 		Vector2(-3.6, -6.2),  # 8: Coral fighter
 		Vector2(2.8, -6.5),   # 9: Lime fighter
 		Vector2(-1.2, -7.2),  # 10: Lavender fighter
-		Vector2(4.5, 3.6),    # 11: Gold fighter
+		Vector2(-5.4, -5.2),  # 11: Gold fighter (upper-left mid-ground, keeping bottom-right banner clear)
 	]
-	# Distinct bot starter parts so every bot has a clear silhouette and drops exciting parts on death
 	var bot_loadouts: Array[Dictionary] = [
-		{}, # 0: Player handled below
+		{},
 		{PartData.Slot.ARMS: &"giant_fist", PartData.Slot.LEGS: &"spring_legs"},
 		{PartData.Slot.HEAD: &"visor_head", PartData.Slot.CORE: &"shield_core"},
 		{PartData.Slot.HEAD: &"spike_helm", PartData.Slot.ARMS: &"giant_fist"},
@@ -204,7 +252,6 @@ func spawn_all_combatants() -> void:
 func _spawn_initial_arena_drops() -> void:
 	dropped_parts.clear()
 	_power_part_timer = balance.power_part_interval_sec
-	# Spawn collectible parts in clear mid-ground lanes so their 3D shapes & rarity beacons are immediately visible
 	spawn_dropped_part(&"mega_claws", Vector2(-1.4, 0.9), Vector2.ZERO, false)
 	spawn_dropped_part(&"roller_wheels", Vector2(1.7, 0.6), Vector2.ZERO, false)
 	spawn_dropped_part(&"magnet_core", Vector2(0.2, -2.2), Vector2.ZERO, false)
@@ -273,7 +320,6 @@ func submit_client_input(combatant_id: int, move_vec: Vector2, ability_pressed: 
 	if combatant_id < 0 or combatant_id >= combatants.size():
 		return
 	var c: CombatantState = combatants[combatant_id]
-	# Authoritative server clamps input vector length to <= 1.0 (anti-cheat rule 1)
 	if move_vec.length_squared() > 1.0:
 		c.move_input = move_vec.normalized()
 	else:
@@ -291,11 +337,40 @@ func _physics_process(delta: float) -> void:
 		steps += 1
 
 func step_simulation(dt: float) -> void:
-	match_elapsed_sec = fmod(match_elapsed_sec + dt, balance.match_duration_sec)
+	if match_phase == MatchPhase.RESULT:
+		result_timer_sec = maxf(0.0, result_timer_sec - dt)
+		return
+
+	var prev_phase: MatchPhase = match_phase
+	match_elapsed_sec = minf(balance.match_duration_sec, match_elapsed_sec + dt)
+	match_phase = _compute_phase_for_time(match_elapsed_sec)
+
+	if match_phase == MatchPhase.FRENZY and prev_phase != MatchPhase.FRENZY:
+		frenzy_started.emit()
+		_record_event(&"frenzy_start", -1, -1, Vector2.ZERO)
+		collapse_outer_ring()
+
+	if match_phase == MatchPhase.FRENZY:
+		_frenzy_collapse_timer -= dt
+		if _frenzy_collapse_timer <= 0.0:
+			_frenzy_collapse_timer = balance.frenzy_collapse_interval_sec
+			collapse_outer_ring()
+
+	if match_phase == MatchPhase.RESULT:
+		result_timer_sec = balance.result_screen_duration_sec
+		var board: Array[Dictionary] = build_leaderboard()
+		var p_rank: int = 1
+		for idx: int in range(board.size()):
+			if int(board[idx]["id"]) == 0:
+				p_rank = idx + 1
+				break
+		match_ended.emit(board, p_rank)
+		state_ticked.emit(0.0)
+		return
 
 	_power_part_timer -= dt
 	if _power_part_timer <= 0.0:
-		_power_part_timer = balance.power_part_interval_sec
+		_power_part_timer = balance.power_part_interval_sec * (0.5 if match_phase == MatchPhase.FRENZY else 1.0)
 		var pp: PartData = PartCatalog.pick_random_part(_rng, PartData.Rarity.EPIC, PartData.Rarity.LEGENDARY)
 		var angle: float = _rng.randf_range(0.0, TAU)
 		spawn_dropped_part(pp.part_id, PEDESTAL_WORLD_XZ + Vector2(cos(angle), sin(angle)) * 1.6, Vector2(cos(angle), sin(angle)) * 2.5, true)
@@ -353,6 +428,65 @@ func step_simulation(dt: float) -> void:
 	_prune_event_log()
 	state_ticked.emit(get_time_remaining())
 
+func collapse_outer_ring() -> Array[Vector2i]:
+	var max_rings: int = 3
+	if collapsed_rings_count >= max_rings:
+		return []
+	var hw: int = balance.grid_width / 2 - collapsed_rings_count
+	var hd: int = balance.grid_depth / 2 - collapsed_rings_count
+	var min_x: int = -hw
+	var max_x: int = hw - 1
+	var min_z: int = -hd
+	var max_z: int = hd - 1
+
+	var collapsed: Array[Vector2i] = []
+	for gx: int in range(min_x, max_x + 1):
+		for gz: int in range(min_z, max_z + 1):
+			if gx == min_x or gx == max_x or gz == min_z or gz == max_z:
+				var cell := Vector2i(gx, gz)
+				if grid_cells.get(cell, CellType.VOID) != CellType.VOID:
+					if block_hp.has(cell):
+						block_hp.erase(cell)
+						block_damaged.emit(cell, 0, true, cell_to_world_xz(cell))
+					grid_cells[cell] = CellType.VOID
+					collapsed.append(cell)
+
+	collapsed_rings_count += 1
+	var safe_b: Vector2 = get_safe_bounds_xz()
+	# Push any combatants standing on the collapsing outer ring inward
+	for c: CombatantState in combatants:
+		if not c.alive:
+			continue
+		if absf(c.pos.x) > safe_b.x or absf(c.pos.y) > safe_b.y:
+			c.pos = _clamp_to_arena(c.pos)
+			var inward: Vector2 = (Vector2.ZERO - c.pos).normalized()
+			c.vel = inward * balance.hazard_knockback
+	for drop: DroppedPartState in dropped_parts:
+		drop.pos = _clamp_to_arena(drop.pos)
+
+	arena_ring_collapsed.emit(collapsed_rings_count, collapsed, safe_b)
+	return collapsed
+
+func build_leaderboard() -> Array[Dictionary]:
+	var entries: Array[Dictionary] = []
+	for c: CombatantState in combatants:
+		_recalc_combatant_stats(c, false)
+		entries.append({
+			"id": c.id,
+			"is_bot": c.is_bot,
+			"total_mass": c.total_mass,
+			"stolen_parts_count": c.stolen_parts_count,
+			"kills": c.kills,
+			"is_abomination": c.is_abomination,
+			"slots": c.slots.duplicate(),
+		})
+	entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if int(a["total_mass"]) != int(b["total_mass"]):
+			return int(a["total_mass"]) > int(b["total_mass"])
+		return int(a["stolen_parts_count"]) > int(b["stolen_parts_count"])
+	)
+	return entries
+
 func _update_dropped_parts(dt: float) -> void:
 	var idx: int = dropped_parts.size() - 1
 	while idx >= 0:
@@ -388,7 +522,6 @@ func _find_collector_for_drop(drop: DroppedPartState) -> CombatantState:
 			continue
 		var current_pid: StringName = c.slots.get(drop.slot, &"base_fist") as StringName
 		var current_part: PartData = PartCatalog.get_part(current_pid)
-		# Equip if dropped part is an upgrade, or a different piece of equal rarity (never auto-downgrade a higher-rarity slot!)
 		var should_equip: bool = false
 		if int(drop.rarity) > int(current_part.rarity):
 			should_equip = true
@@ -408,7 +541,6 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 		_recalc_combatant_stats(killer, true)
 		_record_event(&"kill", killer.id, victim.id, victim.pos)
 
-	# Determine which slots to drop & lose on death (AGENTS.md Section 1 & GDD: Abomination drops 3, normal drops 1)
 	var max_drops: int = balance.abomination_drop_count if victim.is_abomination else 1
 	var non_base_slots: Array[PartData.Slot] = []
 	for s_key: Variant in victim.slots.keys():
@@ -418,7 +550,6 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 		if pid != base_pid:
 			non_base_slots.append(slot_enum)
 
-	# Sort non-base slots by rarity descending so the juiciest piece drops first
 	non_base_slots.sort_custom(func(a: PartData.Slot, b: PartData.Slot) -> bool:
 		var pa: PartData = PartCatalog.get_part(victim.slots[a] as StringName)
 		var pb: PartData = PartCatalog.get_part(victim.slots[b] as StringName)
@@ -436,7 +567,6 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 		spawn_dropped_part(drop_pid, victim.pos + Vector2(cos(angle), sin(angle)) * 0.45, pop_vel, false)
 		dropped_count += 1
 
-	# Even if a bot had only base parts left, guarantee a Rare combat part drop so every kill rewards the player!
 	if dropped_count == 0:
 		var bonus_part: PartData = PartCatalog.pick_random_part(_rng, PartData.Rarity.RARE, PartData.Rarity.EPIC)
 		var angle: float = _rng.randf_range(0.0, TAU)
@@ -446,36 +576,11 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 	_recalc_combatant_stats(victim, true)
 
 func _update_bot_input(bot: CombatantState, _dt: float) -> void:
-	# If a high-value dropped part is nearby and upgrades a slot, steer toward it!
-	var best_drop: DroppedPartState = null
-	var best_drop_dist_sq: float = 36.0 # 6m search radius
-	for drop: DroppedPartState in dropped_parts:
-		var cur_pid: StringName = bot.slots.get(drop.slot, &"base_fist") as StringName
-		var cur_part: PartData = PartCatalog.get_part(cur_pid)
-		if int(drop.rarity) > int(cur_part.rarity):
-			var d_sq: float = bot.pos.distance_squared_to(drop.pos)
-			if d_sq < best_drop_dist_sq:
-				best_drop_dist_sq = d_sq
-				best_drop = drop
-	if best_drop != null:
-		bot.move_input = (best_drop.pos - bot.pos).normalized()
-		return
-
-	var nearest: CombatantState = find_nearest_enemy(bot.id, 999.0)
-	if nearest == null:
-		bot.move_input = Vector2.ZERO
-		return
-	var to_target: Vector2 = nearest.pos - bot.pos
-	var dist: float = to_target.length()
-	var dir: Vector2 = to_target / maxf(dist, 0.001)
-	var tangent := Vector2(-dir.y, dir.x) * (1.0 if (bot.id % 2 == 0) else -1.0)
-	var eff_range: float = balance.auto_attack_range * bot.range_mult
-	if dist > eff_range * 0.85:
-		bot.move_input = (dir * 0.78 + tangent * 0.35).normalized()
-	elif dist < eff_range * 0.48:
-		bot.move_input = (-dir * 0.55 + tangent * 0.65).normalized()
-	else:
-		bot.move_input = (tangent * 0.75).normalized()
+	var decision: Dictionary = BotUtilityAI.decide_bot_input(bot, self, get_safe_bounds_xz())
+	bot.last_ai_action = decision["action"] as StringName
+	bot.move_input = decision["move_input"] as Vector2
+	if bool(decision["dash"]):
+		bot.ability_requested = true
 
 func find_nearest_enemy(attacker_id: int, max_range: float) -> CombatantState:
 	if attacker_id < 0 or attacker_id >= combatants.size():
@@ -515,7 +620,6 @@ func _try_auto_attack(attacker: CombatantState) -> bool:
 		attack_performed.emit(attacker.id, target.id, attacker.pos, target.pos, eff_damage)
 		return true
 
-	# If no enemy in range, auto-attack adjacent destructible block if close
 	var nearest_block_cell := Vector2i(9999, 9999)
 	var best_block_dist_sq: float = eff_range * eff_range
 	for cell_var: Variant in block_hp.keys():
@@ -555,9 +659,8 @@ func damage_block(cell: Vector2i, amount: int) -> bool:
 		return false
 
 func _clamp_to_arena(candidate: Vector2) -> Vector2:
-	var max_x: float = (float(balance.grid_width) * 0.5 - 0.8) * balance.tile_size
-	var max_z: float = (float(balance.grid_depth) * 0.5 - 0.8) * balance.tile_size
-	return Vector2(clampf(candidate.x, -max_x, max_x), clampf(candidate.y, -max_z, max_z))
+	var safe_b: Vector2 = get_safe_bounds_xz()
+	return Vector2(clampf(candidate.x, -safe_b.x, safe_b.x), clampf(candidate.y, -safe_b.y, minf(safe_b.y, 4.8)))
 
 func _resolve_grid_and_bounds(c: CombatantState, candidate: Vector2) -> Vector2:
 	var out: Vector2 = _clamp_to_arena(candidate)
@@ -597,7 +700,7 @@ func _resolve_combatant_separation() -> void:
 
 func _pick_spawn_pos(combatant_id: int) -> Vector2:
 	var angle: float = float(combatant_id) * TAU / float(maxi(balance.max_combatants, 1))
-	return Vector2(cos(angle) * 5.0, sin(angle) * 5.0)
+	return _clamp_to_arena(Vector2(cos(angle) * 4.5, sin(angle) * 4.5))
 
 func cell_to_world_xz(cell: Vector2i) -> Vector2:
 	return Vector2((float(cell.x) + 0.5) * balance.tile_size, (float(cell.y) + 0.5) * balance.tile_size)

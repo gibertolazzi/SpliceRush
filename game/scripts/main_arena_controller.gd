@@ -19,6 +19,7 @@ var _ability_queued: bool = false
 var _frame_counter: int = 0
 var _screenshot_path: String = ""
 var _simulate_input_preview: bool = false
+var _preview_frenzy: bool = false
 var _web_first_frame_reported: bool = false
 var _web_first_input_reported: bool = false
 
@@ -28,6 +29,8 @@ func _ready() -> void:
 	_setup_camera()
 	_setup_server_and_world()
 	_setup_ui()
+	if _preview_frenzy:
+		server.match_elapsed_sec = balance.frenzy_start_sec - 0.02
 	if _simulate_input_preview and virtual_joystick != null:
 		virtual_joystick.simulate_drag(Vector2(210.0, 868.0), Vector2(246.0, 832.0))
 
@@ -37,6 +40,8 @@ func _parse_cmdline_args() -> void:
 			_screenshot_path = arg.trim_prefix("--capture-screenshot=")
 		elif arg == "--simulate-input":
 			_simulate_input_preview = true
+		elif arg == "--preview-frenzy":
+			_preview_frenzy = true
 
 func _setup_environment_and_lights() -> void:
 	var we := WorldEnvironment.new()
@@ -142,6 +147,10 @@ func _setup_server_and_world() -> void:
 	server.part_dropped.connect(_on_server_part_dropped)
 	server.part_picked_up.connect(_on_server_part_picked_up)
 	server.combatant_slots_changed.connect(_on_server_combatant_slots_changed)
+	server.frenzy_started.connect(_on_server_frenzy_started)
+	server.arena_ring_collapsed.connect(_on_server_arena_ring_collapsed)
+	server.match_ended.connect(_on_server_match_ended)
+	server.match_restarted.connect(_on_server_match_restarted)
 
 func _setup_ui() -> void:
 	var layer := CanvasLayer.new()
@@ -159,9 +168,13 @@ func _setup_ui() -> void:
 	hud = VerticalHUD.new()
 	hud.name = "VerticalHUD"
 	layer.add_child(hud)
+	hud.rematch_requested.connect(_on_hud_rematch_requested)
 	if not server.combatants.is_empty():
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)
+
+func _on_hud_rematch_requested() -> void:
+	server.request_rematch()
 
 func _on_joystick_updated(vec: Vector2) -> void:
 	_joystick_vec = vec
@@ -273,6 +286,32 @@ func _on_server_combatant_slots_changed(combatant_id: int, slots: Dictionary, is
 		fighter_nodes[combatant_id].apply_slots(slots, is_abomination, true)
 	if combatant_id == 0 and hud != null:
 		hud.on_player_slots_updated(slots, is_abomination, total_mass)
+
+func _on_server_frenzy_started() -> void:
+	camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.55)
+	if hud != null:
+		hud.on_frenzy_started()
+
+func _on_server_arena_ring_collapsed(_ring_index: int, collapsed_cells: Array[Vector2i], safe_bounds_xz: Vector2) -> void:
+	camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.45)
+	arena_builder.on_arena_ring_collapsed(collapsed_cells, safe_bounds_xz, server)
+
+func _on_server_match_ended(leaderboard: Array[Dictionary], player_rank: int) -> void:
+	if hud != null:
+		hud.on_match_ended(leaderboard, player_rank, balance.result_screen_duration_sec)
+
+func _on_server_match_restarted() -> void:
+	arena_builder.build_from_server(server)
+	for i: int in range(server.combatants.size()):
+		var c: MatchServer.CombatantState = server.combatants[i]
+		if i < fighter_nodes.size():
+			fighter_nodes[i].apply_slots(c.slots, c.is_abomination, false)
+			fighter_nodes[i].update_visual_state(c.pos, c.vel, c.facing_angle, 0.0, 0.0, c.alive, 0.016)
+	if hud != null and not server.combatants.is_empty():
+		var p0: MatchServer.CombatantState = server.combatants[0]
+		hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)
+		hud.on_stolen_parts_updated(p0.stolen_parts_count)
+		hud.on_match_restarted()
 
 func _update_attack_fx(dt: float) -> void:
 	var idx: int = active_attack_fx.size() - 1

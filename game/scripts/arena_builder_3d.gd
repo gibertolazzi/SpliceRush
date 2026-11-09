@@ -6,7 +6,10 @@ const BEAM_SHADER := preload("res://game/shaders/power_beam.gdshader")
 
 var destructible_nodes: Dictionary = {} # Vector2i -> Node3D
 var dropped_part_nodes: Dictionary = {} # int (drop_id) -> Node3D
+var floor_cell_map: Dictionary = {}     # Vector2i -> Dictionary {mm, idx}
 var power_cube_node: Node3D
+var floor_base_mi: MeshInstance3D
+var frenzy_perimeter_root: Node3D
 var debris_pool: Array[MeshInstance3D] = []
 var active_debris: Array[Dictionary] = []
 
@@ -54,6 +57,7 @@ func build_from_server(server: MatchServer) -> void:
 		child.queue_free()
 	destructible_nodes.clear()
 	dropped_part_nodes.clear()
+	floor_cell_map.clear()
 	active_debris.clear()
 	debris_pool.clear()
 
@@ -67,6 +71,43 @@ func build_from_server(server: MatchServer) -> void:
 
 	for drop: MatchServer.DroppedPartState in server.dropped_parts:
 		spawn_dropped_part_visual(drop.id, drop.part_id, int(drop.slot), int(drop.rarity), drop.pos, drop.is_power_part)
+
+func on_arena_ring_collapsed(collapsed_cells: Array[Vector2i], safe_bounds_xz: Vector2, server: MatchServer) -> void:
+	var step_debris: int = 0
+	for cell: Vector2i in collapsed_cells:
+		if floor_cell_map.has(cell):
+			var info: Dictionary = floor_cell_map[cell]
+			var mm: MultiMesh = info["mm"] as MultiMesh
+			var idx: int = int(info["idx"])
+			# Collapse slab into the void below
+			mm.set_instance_transform(idx, Transform3D(Basis.from_scale(Vector3(0.001, 0.001, 0.001)), Vector3(0.0, -50.0, 0.0)))
+			floor_cell_map.erase(cell)
+		if step_debris % 5 == 0 and server != null:
+			spawn_impact_debris(server.cell_to_world_xz(cell), 2)
+		step_debris += 1
+
+	if floor_base_mi != null and is_instance_valid(floor_base_mi):
+		var bm: BoxMesh = floor_base_mi.mesh as BoxMesh
+		if bm != null:
+			bm.size = Vector3(safe_bounds_xz.x * 2.0 + 1.8, 1.4, safe_bounds_xz.y * 2.0 + 1.8)
+
+	# Build/update visible Frenzy Warning Perimeter Rails & crumbling edge blocks inside the camera view
+	if frenzy_perimeter_root != null and is_instance_valid(frenzy_perimeter_root):
+		frenzy_perimeter_root.queue_free()
+	frenzy_perimeter_root = Node3D.new()
+	frenzy_perimeter_root.name = "FrenzyPerimeter"
+	add_child(frenzy_perimeter_root)
+
+	var danger_mat := StandardMaterial3D.new()
+	danger_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	danger_mat.albedo_color = Color(1.0, 0.20, 0.45)
+
+	var edge_x: float = minf(safe_bounds_xz.x, 5.4)
+	_spawn_box(frenzy_perimeter_root, Vector3(0.22, 0.18, 14.0), Vector3(-edge_x, 0.12, -2.0), danger_mat)
+	_spawn_box(frenzy_perimeter_root, Vector3(0.22, 0.18, 14.0), Vector3(edge_x, 0.12, -2.0), danger_mat)
+	# Tilted falling stone slabs on left and right edges to show the arena actively crumbling
+	_spawn_box(frenzy_perimeter_root, Vector3(1.2, 0.28, 1.2), Vector3(-edge_x - 0.6, -0.35, 1.2), _stone_mat_b, Vector3(18.0, 12.0, 38.0))
+	_spawn_box(frenzy_perimeter_root, Vector3(1.2, 0.28, 1.2), Vector3(edge_x + 0.6, -0.35, 0.8), _stone_mat_a, Vector3(-16.0, -10.0, -40.0))
 
 func spawn_dropped_part_visual(drop_id: int, part_id: StringName, slot: int, rarity: int, pos_xz: Vector2, _is_power: bool) -> void:
 	if _stone_mat_a == null:
@@ -84,26 +125,21 @@ func spawn_dropped_part_visual(drop_id: int, part_id: StringName, slot: int, rar
 	prim_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	prim_mat.albedo_color = pdata.primary_color
 
-	# Rarity Base Shape + Vertical Beacon (Rule 9: shape + glow, not just color)
 	match rarity:
 		PartData.Rarity.COMMON:
 			_spawn_box(root_n, Vector3(0.62, 0.06, 0.62), Vector3(0.0, 0.05, 0.0), r_mat)
 		PartData.Rarity.RARE:
-			# Rotated diamond pad + medium beacon
 			_spawn_box(root_n, Vector3(0.76, 0.07, 0.76), Vector3(0.0, 0.05, 0.0), r_mat, Vector3(0.0, 45.0, 0.0))
 			_spawn_box(root_n, Vector3(0.10, 1.35, 0.10), Vector3(0.0, 0.72, 0.0), r_mat)
 		PartData.Rarity.EPIC:
-			# Crossed 8-point star pad + twin beacon
 			_spawn_box(root_n, Vector3(0.84, 0.08, 0.84), Vector3(0.0, 0.05, 0.0), r_mat)
 			_spawn_box(root_n, Vector3(0.84, 0.08, 0.84), Vector3(0.0, 0.06, 0.0), r_mat, Vector3(0.0, 45.0, 0.0))
 			_spawn_box(root_n, Vector3(0.14, 1.85, 0.14), Vector3(0.0, 0.95, 0.0), r_mat)
 		PartData.Rarity.LEGENDARY:
-			# Crowned pedestal pad + tall golden pillar
 			_spawn_box(root_n, Vector3(0.96, 0.09, 0.96), Vector3(0.0, 0.05, 0.0), r_mat)
 			_spawn_box(root_n, Vector3(0.96, 0.09, 0.96), Vector3(0.0, 0.07, 0.0), _white_glow_mat, Vector3(0.0, 45.0, 0.0))
 			_spawn_box(root_n, Vector3(0.18, 2.55, 0.18), Vector3(0.0, 1.30, 0.0), r_mat)
 
-	# Floating Slot-Specific 3D Part Mesh
 	var item_pivot := Node3D.new()
 	item_pivot.name = "ItemMesh"
 	item_pivot.position = Vector3(0.0, 0.68, 0.0)
@@ -147,18 +183,22 @@ func sync_dropped_parts(drops: Array[MatchServer.DroppedPartState], dt: float) -
 				item_mesh.position.y = 0.66 + sin(t_sec + float(drop.id)) * 0.14
 
 func _build_floor_multimesh(server: MatchServer, tile: float) -> void:
-	var base_mi := MeshInstance3D.new()
+	floor_base_mi = MeshInstance3D.new()
 	var base_box := BoxMesh.new()
 	base_box.size = Vector3(float(server.balance.grid_width) * tile + 1.2, 1.4, float(server.balance.grid_depth) * tile + 1.2)
-	base_mi.mesh = base_box
-	base_mi.position = Vector3(0.0, -0.82, 0.0)
-	base_mi.material_override = _stone_dark_mat
-	add_child(base_mi)
+	floor_base_mi.mesh = base_box
+	floor_base_mi.position = Vector3(0.0, -0.82, 0.0)
+	floor_base_mi.material_override = _stone_dark_mat
+	add_child(floor_base_mi)
 
+	var cells_a_coords: Array[Vector2i] = []
+	var cells_b_coords: Array[Vector2i] = []
 	var cells_a: Array[Transform3D] = []
 	var cells_b: Array[Transform3D] = []
 	for cell_var: Variant in server.grid_cells.keys():
 		var cell: Vector2i = cell_var as Vector2i
+		if int(server.grid_cells[cell]) == MatchServer.CellType.VOID:
+			continue
 		var wxz: Vector2 = server.cell_to_world_xz(cell)
 		var hash_v: int = abs((cell.x * 73856093) ^ (cell.y * 19349663))
 		var y_off: float = -0.06 + float(hash_v % 5) * 0.018
@@ -166,14 +206,21 @@ func _build_floor_multimesh(server: MatchServer, tile: float) -> void:
 		var basis := Basis.from_euler(Vector3(0.0, yaw, 0.0))
 		var xform := Transform3D(basis, Vector3(wxz.x, y_off, wxz.y))
 		if ((cell.x + cell.y) & 1) == 0:
+			cells_a_coords.append(cell)
 			cells_a.append(xform)
 		else:
+			cells_b_coords.append(cell)
 			cells_b.append(xform)
 
-	_add_slab_multimesh(cells_a, tile * 0.92, _stone_mat_a)
-	_add_slab_multimesh(cells_b, tile * 0.90, _stone_mat_b)
+	var mm_a: MultiMesh = _add_slab_multimesh(cells_a, tile * 0.92, _stone_mat_a)
+	for i: int in range(cells_a_coords.size()):
+		floor_cell_map[cells_a_coords[i]] = {"mm": mm_a, "idx": i}
 
-func _add_slab_multimesh(transforms: Array[Transform3D], slab_size: float, mat: Material) -> void:
+	var mm_b: MultiMesh = _add_slab_multimesh(cells_b, tile * 0.90, _stone_mat_b)
+	for i: int in range(cells_b_coords.size()):
+		floor_cell_map[cells_b_coords[i]] = {"mm": mm_b, "idx": i}
+
+func _add_slab_multimesh(transforms: Array[Transform3D], slab_size: float, mat: Material) -> MultiMesh:
 	var mmi := MultiMeshInstance3D.new()
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -186,6 +233,7 @@ func _add_slab_multimesh(transforms: Array[Transform3D], slab_size: float, mat: 
 	mmi.multimesh = mm
 	mmi.material_override = mat
 	add_child(mmi)
+	return mm
 
 func _build_grid_props(server: MatchServer, tile: float) -> void:
 	var hazard_mat := ShaderMaterial.new()
@@ -210,7 +258,6 @@ func _build_grid_props(server: MatchServer, tile: float) -> void:
 			_spawn_box(block_root, Vector3(tile * 0.92, 0.18, tile * 0.92), Vector3(0.0, tile * 0.82, 0.0), _stone_mat_a)
 			destructible_nodes[cell] = block_root
 
-	# Left mystery blue "?" block seen in key art
 	var left_mystery := Node3D.new()
 	left_mystery.position = Vector3(-5.8, 0.95, 0.5)
 	left_mystery.rotation_degrees = Vector3(0.0, 22.0, 0.0)

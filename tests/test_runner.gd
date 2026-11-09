@@ -14,6 +14,8 @@ func _initialize() -> void:
 		"test_virtual_joystick_and_rebind",
 		"test_part_drop_on_kill_and_pickup_transforms_body",
 		"test_abomination_activation_and_triple_drop",
+		"test_bot_utility_ai_decisions",
+		"test_90s_match_frenzy_collapse_result_and_rematch",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -143,7 +145,6 @@ func test_part_drop_on_kill_and_pickup_transforms_body() -> bool:
 
 	var p: MatchServer.CombatantState = srv.combatants[0]
 	var bot: MatchServer.CombatantState = srv.combatants[1]
-	# Give player base arms and bot a Chainsaw Arm
 	p.slots[PartData.Slot.ARMS] = &"base_fist"
 	srv._recalc_combatant_stats(p, false)
 	bot.slots = {
@@ -157,9 +158,8 @@ func test_part_drop_on_kill_and_pickup_transforms_body() -> bool:
 	p.pos = Vector2(0.0, 0.0)
 	p.attack_cooldown = 0.0
 	bot.pos = Vector2(1.0, 0.0)
-	bot.hp = 5 # 1 hit away from death
+	bot.hp = 5
 
-	# Step 1: Player auto-attacks and kills bot -> Chainsaw Arm drops!
 	srv.step_simulation(1.0 / 30.0)
 	assert_eq(bot.alive, false, "bot_killed_by_auto_attack")
 	assert_eq(bot.slots[PartData.Slot.ARMS], &"base_fist", "dead_bot_lost_chainsaw_arm")
@@ -167,7 +167,6 @@ func test_part_drop_on_kill_and_pickup_transforms_body() -> bool:
 	var drop: MatchServer.DroppedPartState = srv.dropped_parts[0]
 	assert_eq(drop.part_id, &"chainsaw_arm", "dropped_part_is_chainsaw_arm")
 
-	# Step 2: Move player onto the dropped part and advance past grace period
 	var stolen_before: int = p.stolen_parts_count
 	for _i: int in range(10):
 		p.pos = drop.pos
@@ -176,7 +175,6 @@ func test_part_drop_on_kill_and_pickup_transforms_body() -> bool:
 	assert_eq(p.slots[PartData.Slot.ARMS], &"chainsaw_arm", "player_equipped_chainsaw_arm")
 	assert_eq(p.stolen_parts_count, stolen_before + 1, "stolen_parts_count_incremented")
 
-	# Verify 3D rig mesh socket swap
 	var fighter_3d := BlockyFighter3D.new()
 	root.add_child(fighter_3d)
 	fighter_3d.setup_fighter(0, false, p.base_color, 0, {
@@ -209,13 +207,75 @@ func test_abomination_activation_and_triple_drop() -> bool:
 	srv._recalc_combatant_stats(bot, false)
 	assert_eq(bot.is_abomination, false, "not_abomination_with_one_common_slot")
 
-	# Equip Rare+ head -> all 4 slots are now Rare+ -> Abomination!
 	srv.equip_part_on_combatant(bot.id, &"laser_eye")
 	assert_eq(bot.is_abomination, true, "becomes_abomination_with_4_rare_plus_parts")
 
-	# Defeating the Abomination drops 3 parts!
 	srv._handle_combatant_death(bot, srv.combatants[0])
 	assert_eq(srv.dropped_parts.size(), 3, "abomination_drops_3_parts_on_death")
 	assert_eq(bot.is_abomination, false, "abomination_lost_status_after_losing_parts")
+	srv.free()
+	return true
+
+func test_bot_utility_ai_decisions() -> bool:
+	var srv := MatchServer.new()
+	srv.bots_enabled = true
+	root.add_child(srv)
+	srv.dropped_parts.clear()
+
+	var bot: MatchServer.CombatantState = srv.combatants[1]
+	bot.slots = {
+		PartData.Slot.HEAD: &"base_head",
+		PartData.Slot.ARMS: &"base_fist",
+		PartData.Slot.LEGS: &"base_boots",
+		PartData.Slot.CORE: &"base_core",
+	}
+	srv._recalc_combatant_stats(bot, false)
+	bot.pos = Vector2(0.0, 0.0)
+
+	# Place a Legendary part 1.5m to the right -> Utility AI should choose collect_upgrade_part
+	srv.spawn_dropped_part(&"laser_eye", Vector2(1.5, 0.0), Vector2.ZERO, true)
+	var dec_loot: Dictionary = BotUtilityAI.decide_bot_input(bot, srv, srv.get_safe_bounds_xz())
+	assert_eq(dec_loot["action"], &"collect_upgrade_part", "utility_ai_prioritizes_nearby_legendary_upgrade")
+	assert_true((dec_loot["move_input"] as Vector2).x > 0.8, "utility_ai_steers_toward_upgrade_part")
+
+	# Place bot on the outer edge during Frenzy -> Utility AI should choose evade_collapse
+	srv.match_phase = MatchServer.MatchPhase.FRENZY
+	var safe_b: Vector2 = srv.get_safe_bounds_xz()
+	bot.pos = Vector2(safe_b.x * 0.98, 0.0)
+	var dec_evade: Dictionary = BotUtilityAI.decide_bot_input(bot, srv, safe_b)
+	assert_eq(dec_evade["action"], &"evade_collapse", "utility_ai_evades_collapsing_frenzy_edge")
+	assert_true((dec_evade["move_input"] as Vector2).x < -0.8, "utility_ai_steers_inward_from_edge")
+	srv.free()
+	return true
+
+func test_90s_match_frenzy_collapse_result_and_rematch() -> bool:
+	var srv := MatchServer.new()
+	srv.bots_enabled = true
+	root.add_child(srv)
+	srv.start_new_match(0.0, false)
+	assert_eq(srv.match_phase, MatchServer.MatchPhase.SPAWN, "match_starts_in_spawn_phase")
+
+	# Step past 60s into Frenzy
+	srv.match_elapsed_sec = 59.95
+	srv.step_simulation(0.1)
+	assert_eq(srv.match_phase, MatchServer.MatchPhase.FRENZY, "match_enters_frenzy_at_60s")
+	assert_eq(srv.collapsed_rings_count, 1, "outer_ring_collapsed_on_frenzy_start")
+	var outer_cell := Vector2i(-srv.balance.grid_width / 2, 0)
+	assert_eq(int(srv.grid_cells[outer_cell]), MatchServer.CellType.VOID, "outer_ring_cell_is_void")
+
+	# Step to 90s match end
+	srv.match_elapsed_sec = 89.95
+	srv.step_simulation(0.1)
+	assert_eq(srv.match_phase, MatchServer.MatchPhase.RESULT, "match_enters_result_at_90s")
+	assert_true(is_equal_approx(srv.result_timer_sec, 5.0), "result_screen_timer_is_5_seconds")
+	var board: Array[Dictionary] = srv.build_leaderboard()
+	assert_eq(board.size(), 12, "leaderboard_has_12_combatants")
+	assert_true(int(board[0]["total_mass"]) >= int(board[1]["total_mass"]), "leaderboard_sorted_by_mass_desc")
+
+	# 1-Tap Rematch resets match cleanly
+	srv.request_rematch()
+	assert_eq(srv.match_phase, MatchServer.MatchPhase.SPAWN, "rematch_resets_to_spawn_phase")
+	assert_eq(srv.collapsed_rings_count, 0, "rematch_restores_collapsed_rings")
+	assert_eq(int(srv.grid_cells[outer_cell]), MatchServer.CellType.FLOOR, "rematch_restores_outer_floor_cells")
 	srv.free()
 	return true
