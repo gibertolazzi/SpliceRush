@@ -5,6 +5,7 @@ extends Node3D
 
 var server: MatchServer
 var arena_builder: ArenaBuilder3D
+var sound_controller: SoundController
 var camera: Camera3D
 var hud: VerticalHUD
 var virtual_joystick: TouchJoystick
@@ -13,26 +14,37 @@ var attack_fx_pool: Array[MeshInstance3D] = []
 var active_attack_fx: Array[Dictionary] = []
 
 var camera_shake_trauma: float = 0.0
+var kill_cam_timer: float = 0.0
+var kill_cam_focus_xz: Vector2 = Vector2.ZERO
+var hit_stop_active: bool = false
 var target_ring_mesh: MeshInstance3D
+
 var _joystick_vec: Vector2 = Vector2.ZERO
 var _ability_queued: bool = false
 var _frame_counter: int = 0
 var _screenshot_path: String = ""
 var _simulate_input_preview: bool = false
 var _preview_frenzy: bool = false
+var _preview_clip: bool = false
 var _web_first_frame_reported: bool = false
 var _web_first_input_reported: bool = false
 
 func _ready() -> void:
 	_parse_cmdline_args()
+	_setup_audio()
 	_setup_environment_and_lights()
 	_setup_camera()
 	_setup_server_and_world()
 	_setup_ui()
 	if _preview_frenzy:
 		server.match_elapsed_sec = balance.frenzy_start_sec - 0.02
+	if _preview_clip:
+		_stage_viral_clip_moment()
 	if _simulate_input_preview and virtual_joystick != null:
 		virtual_joystick.simulate_drag(Vector2(210.0, 868.0), Vector2(246.0, 832.0))
+
+func _exit_tree() -> void:
+	Engine.time_scale = 1.0
 
 func _parse_cmdline_args() -> void:
 	for arg: String in OS.get_cmdline_user_args():
@@ -42,6 +54,40 @@ func _parse_cmdline_args() -> void:
 			_simulate_input_preview = true
 		elif arg == "--preview-frenzy":
 			_preview_frenzy = true
+		elif arg == "--preview-clip":
+			_preview_clip = true
+
+func _setup_audio() -> void:
+	sound_controller = SoundController.new()
+	sound_controller.name = "SoundController"
+	add_child(sound_controller)
+
+func _stage_viral_clip_moment() -> void:
+	for k: Variant in arena_builder.dropped_part_nodes.keys():
+		var dn: Node3D = arena_builder.dropped_part_nodes[k]
+		if is_instance_valid(dn):
+			dn.queue_free()
+	arena_builder.dropped_part_nodes.clear()
+	server.setup_viral_clip_scenario()
+	# Simulate the 3-second viral clip culmination: dash -> KO bot #1 -> steal Chainsaw Arm -> transform into Abomination!
+	var p0: MatchServer.CombatantState = server.combatants[0]
+	var bot1: MatchServer.CombatantState = server.combatants[1]
+	bot1.pos = Vector2(-1.65, 1.35)
+	bot1.prev_pos = bot1.pos
+	server._handle_combatant_death(bot1, p0)
+	if not server.dropped_parts.is_empty():
+		var d: MatchServer.DroppedPartState = server.dropped_parts[0]
+		var d_id: int = d.id
+		var d_pos: Vector2 = d.pos
+		server.dropped_parts.remove_at(0)
+		server.equip_part_on_combatant(0, &"chainsaw_arm")
+		server.part_picked_up.emit(d_id, 0, &"chainsaw_arm", int(PartData.Slot.ARMS), int(PartData.Rarity.EPIC), d_pos)
+	# Keep rocket legs & laser eye for iconic key-art silhouette after clip steal
+	p0.pos = Vector2(0.0, 4.4)
+	p0.prev_pos = p0.pos
+	p0.slots[PartData.Slot.LEGS] = &"rocket_legs"
+	p0.slots[PartData.Slot.HEAD] = &"laser_eye"
+	server._recalc_combatant_stats(p0, true)
 
 func _setup_environment_and_lights() -> void:
 	var we := WorldEnvironment.new()
@@ -147,6 +193,7 @@ func _setup_server_and_world() -> void:
 	server.part_dropped.connect(_on_server_part_dropped)
 	server.part_picked_up.connect(_on_server_part_picked_up)
 	server.combatant_slots_changed.connect(_on_server_combatant_slots_changed)
+	server.abomination_changed.connect(_on_server_abomination_changed)
 	server.frenzy_started.connect(_on_server_frenzy_started)
 	server.arena_ring_collapsed.connect(_on_server_arena_ring_collapsed)
 	server.match_ended.connect(_on_server_match_ended)
@@ -173,6 +220,25 @@ func _setup_ui() -> void:
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)
 
+func trigger_hit_stop(duration_sec: float, time_scale_val: float = 0.12) -> void:
+	if _screenshot_path != "":
+		# Keep frame capture deterministic during automated screenshot runs
+		return
+	if hit_stop_active:
+		return
+	hit_stop_active = true
+	Engine.time_scale = time_scale_val
+	# ignore_time_scale = true (4th parameter) so Engine.time_scale always restores cleanly (game-feel skill)
+	var timer: SceneTreeTimer = get_tree().create_timer(duration_sec, true, false, true)
+	timer.timeout.connect(func() -> void:
+		Engine.time_scale = 1.0
+		hit_stop_active = false
+	)
+
+func trigger_kill_cam(focus_xz: Vector2, duration_sec: float = 0.36) -> void:
+	kill_cam_focus_xz = focus_xz
+	kill_cam_timer = duration_sec
+
 func _on_hud_rematch_requested() -> void:
 	server.request_rematch()
 
@@ -182,6 +248,8 @@ func _on_joystick_updated(vec: Vector2) -> void:
 
 func _on_ability_triggered() -> void:
 	_ability_queued = true
+	if sound_controller != null:
+		sound_controller.play_dash_sfx()
 	_mark_web_first_input()
 
 func _physics_process(_delta: float) -> void:
@@ -189,6 +257,8 @@ func _physics_process(_delta: float) -> void:
 	var combined: Vector2 = _joystick_vec if _joystick_vec.length_squared() > kb_vec.length_squared() else kb_vec
 	if Input.is_action_just_pressed(&"ability_action"):
 		_ability_queued = true
+		if sound_controller != null:
+			sound_controller.play_dash_sfx()
 	if combined.length_squared() > 0.001 or _ability_queued:
 		_mark_web_first_input()
 	server.submit_client_input(0, combined, _ability_queued)
@@ -204,7 +274,8 @@ func _process(delta: float) -> void:
 		var c: MatchServer.CombatantState = server.combatants[i]
 		var fn: BlockyFighter3D = fighter_nodes[i]
 		var interp_xz: Vector2 = c.prev_pos.lerp(c.pos, alpha)
-		fn.update_visual_state(interp_xz, c.vel, c.facing_angle, c.attack_anim_timer, c.hurt_anim_timer, c.alive, delta)
+		var ko_tumble: bool = (not c.alive) and (c.respawn_timer > balance.respawn_delay_sec - 0.75)
+		fn.update_visual_state(interp_xz, c.vel, c.facing_angle, c.attack_anim_timer, c.hurt_anim_timer, c.alive, delta, ko_tumble)
 
 	_update_camera_follow(delta)
 	_update_target_ring()
@@ -221,8 +292,16 @@ func _update_camera_follow(dt: float) -> void:
 	if server.combatants.is_empty():
 		return
 	var player_state: MatchServer.CombatantState = server.combatants[0]
-	var target_x: float = clampf(player_state.pos.x * 0.45, -3.2, 3.2)
-	var target_z: float = clampf(player_state.pos.y + balance.camera_z_bias, 4.5, 13.5)
+	var focus_pos: Vector2 = player_state.pos
+	var desired_fov: float = balance.camera_fov_deg
+	if kill_cam_timer > 0.0:
+		kill_cam_timer = maxf(0.0, kill_cam_timer - dt)
+		focus_pos = player_state.pos.lerp(kill_cam_focus_xz, 0.14)
+		desired_fov = balance.camera_fov_deg - 2.4
+	camera.fov = lerpf(camera.fov, desired_fov, minf(1.0, 12.0 * dt))
+
+	var target_x: float = clampf(focus_pos.x * 0.45, -3.2, 3.2)
+	var target_z: float = clampf(focus_pos.y + balance.camera_z_bias, 4.5, 13.5)
 	var desired := Vector3(target_x, 6.8, target_z)
 	var t: float = 1.0 - exp(-balance.camera_smooth_rate * dt)
 	var base_cam_pos: Vector3 = camera.position.lerp(desired, t)
@@ -253,9 +332,21 @@ func _on_server_state_ticked(time_left: float) -> void:
 		if not server.combatants.is_empty():
 			hud.on_stolen_parts_updated(server.combatants[0].stolen_parts_count)
 
-func _on_server_attack_performed(attacker_id: int, _target_id: int, from_xz: Vector2, to_xz: Vector2, _damage: int) -> void:
+func _on_server_attack_performed(attacker_id: int, target_id: int, from_xz: Vector2, to_xz: Vector2, _damage: int) -> void:
 	if attacker_id == 0:
 		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.35)
+		if target_id >= 0 and target_id < server.combatants.size() and not server.combatants[target_id].alive:
+			trigger_hit_stop(0.065, 0.10)
+			trigger_kill_cam(to_xz, 0.36)
+			if sound_controller != null:
+				sound_controller.play_kill_sfx()
+			if hud != null:
+				hud.trigger_impact_speed_lines(0.32)
+		else:
+			trigger_hit_stop(0.035, 0.20)
+			if sound_controller != null:
+				sound_controller.play_hit_sfx()
+
 	arena_builder.spawn_impact_debris(to_xz, 3)
 	if not attack_fx_pool.is_empty():
 		var fx: MeshInstance3D = attack_fx_pool.pop_back()
@@ -277,7 +368,11 @@ func _on_server_part_dropped(drop_id: int, part_id: StringName, slot: int, rarit
 func _on_server_part_picked_up(drop_id: int, collector_id: int, part_id: StringName, _slot: int, _rarity: int, pos_xz: Vector2) -> void:
 	arena_builder.remove_dropped_part_visual(drop_id, pos_xz)
 	if collector_id == 0:
-		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.45)
+		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.50)
+		trigger_hit_stop(0.14, 0.22)
+		trigger_kill_cam(pos_xz, 0.35)
+		if sound_controller != null:
+			sound_controller.play_steal_stinger()
 		if hud != null:
 			hud.show_part_stolen_toast(part_id)
 
@@ -287,8 +382,16 @@ func _on_server_combatant_slots_changed(combatant_id: int, slots: Dictionary, is
 	if combatant_id == 0 and hud != null:
 		hud.on_player_slots_updated(slots, is_abomination, total_mass)
 
+func _on_server_abomination_changed(combatant_id: int, active: bool, _pos_xz: Vector2) -> void:
+	if active and sound_controller != null:
+		sound_controller.play_abomination_stinger()
+	elif not active and combatant_id == 0 and sound_controller != null:
+		sound_controller.set_music_intensity(&"frenzy" if server.is_frenzy_active() else &"normal")
+
 func _on_server_frenzy_started() -> void:
 	camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.55)
+	if sound_controller != null:
+		sound_controller.set_music_intensity(&"frenzy")
 	if hud != null:
 		hud.on_frenzy_started()
 
@@ -307,6 +410,8 @@ func _on_server_match_restarted() -> void:
 		if i < fighter_nodes.size():
 			fighter_nodes[i].apply_slots(c.slots, c.is_abomination, false)
 			fighter_nodes[i].update_visual_state(c.pos, c.vel, c.facing_angle, 0.0, 0.0, c.alive, 0.016)
+	if sound_controller != null:
+		sound_controller.set_music_intensity(&"normal")
 	if hud != null and not server.combatants.is_empty():
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)

@@ -415,12 +415,28 @@ func update_visual_state(
 	attack_timer: float,
 	hurt_timer: float,
 	alive: bool,
-	dt: float
+	dt: float,
+	ko_tumble_active: bool = false
 ) -> void:
-	visible = alive
-	if not alive:
+	visible = alive or ko_tumble_active
+	if not visible:
 		return
 	global_position = Vector3(interp_xz.x, 0.0, interp_xz.y)
+
+	if ko_tumble_active and not alive:
+		# Cartoon mid-air knockback tumble pose (matches Red Fighter in key-art.png!)
+		pivot.position.y = 0.72
+		pivot.rotation_degrees = Vector3(-24.0, 22.0, 26.0)
+		left_arm_socket.rotation_degrees.z = -55.0
+		right_arm_socket.rotation_degrees.z = 55.0
+		left_leg_socket.rotation_degrees.x = -35.0
+		right_leg_socket.rotation_degrees.x = 25.0
+		return
+	elif fighter_id != 0:
+		pivot.rotation_degrees.x = 0.0
+		pivot.rotation_degrees.z = 0.0
+		left_arm_socket.rotation_degrees.z = 0.0
+		right_arm_socket.rotation_degrees.z = 0.0
 
 	var target_yaw: float = -facing_rad + PI * 0.5
 	if fighter_id == 0:

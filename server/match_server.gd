@@ -136,6 +136,39 @@ func start_new_match(initial_elapsed_sec: float = 0.0, emit_restart: bool = true
 func request_rematch() -> void:
 	start_new_match(0.0, true)
 
+func setup_viral_clip_scenario() -> void:
+	dropped_parts.clear()
+	var p0: CombatantState = combatants[0]
+	p0.pos = Vector2(0.0, 4.2)
+	p0.prev_pos = p0.pos
+	p0.vel = Vector2.ZERO
+	p0.alive = true
+	p0.hp = p0.max_hp
+	p0.attack_cooldown = 0.0
+	p0.dash_cooldown = 0.0
+	p0.stolen_parts_count = 3
+	p0.slots = {
+		PartData.Slot.HEAD: &"visor_head",
+		PartData.Slot.ARMS: &"base_fist",
+		PartData.Slot.LEGS: &"spring_legs",
+		PartData.Slot.CORE: &"crown_core",
+	}
+	_recalc_combatant_stats(p0, true)
+
+	var enemy: CombatantState = combatants[1]
+	enemy.pos = Vector2(-1.1, 3.8)
+	enemy.prev_pos = enemy.pos
+	enemy.vel = Vector2(2.0, 0.5)
+	enemy.alive = true
+	enemy.hp = 15
+	enemy.slots = {
+		PartData.Slot.HEAD: &"laser_eye",
+		PartData.Slot.ARMS: &"chainsaw_arm",
+		PartData.Slot.LEGS: &"base_boots",
+		PartData.Slot.CORE: &"base_core",
+	}
+	_recalc_combatant_stats(enemy, true)
+
 func _compute_phase_for_time(t: float) -> MatchPhase:
 	if t >= balance.match_duration_sec:
 		return MatchPhase.RESULT
@@ -541,7 +574,7 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 		_recalc_combatant_stats(killer, true)
 		_record_event(&"kill", killer.id, victim.id, victim.pos)
 
-	var max_drops: int = balance.abomination_drop_count if victim.is_abomination else 1
+	var max_drops: int = balance.abomination_drop_count if victim.is_abomination else 2
 	var non_base_slots: Array[PartData.Slot] = []
 	for s_key: Variant in victim.slots.keys():
 		var slot_enum: PartData.Slot = s_key as PartData.Slot

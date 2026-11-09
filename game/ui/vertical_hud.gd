@@ -23,6 +23,8 @@ var equipped_slots: Dictionary = {
 
 var _toast_text: String = ""
 var _toast_timer: float = 0.0
+var _flash_timer: float = 0.0
+var _speed_lines_timer: float = 0.0
 var _rematch_btn_rect := Rect2(Vector2(110.0, 560.0), Vector2(320.0, 58.0))
 
 func _ready() -> void:
@@ -36,6 +38,12 @@ func _process(delta: float) -> void:
 		_toast_timer = maxf(0.0, _toast_timer - delta)
 		if _toast_timer <= 0.0:
 			needs_redraw = true
+	if _flash_timer > 0.0:
+		_flash_timer = maxf(0.0, _flash_timer - delta)
+		needs_redraw = true
+	if _speed_lines_timer > 0.0:
+		_speed_lines_timer = maxf(0.0, _speed_lines_timer - delta)
+		needs_redraw = true
 	if show_result_overlay and result_countdown_sec > 0.0:
 		result_countdown_sec = maxf(0.0, result_countdown_sec - delta)
 		needs_redraw = true
@@ -108,6 +116,12 @@ func show_part_stolen_toast(part_id: StringName) -> void:
 	var pdata: PartData = PartCatalog.get_part(part_id)
 	_toast_text = tr(&"HUD_PART_STOLEN_TOAST") % [tr(pdata.translation_key)]
 	_toast_timer = 1.6
+	_flash_timer = 0.22
+	_speed_lines_timer = 0.45
+	queue_redraw()
+
+func trigger_impact_speed_lines(duration_sec: float = 0.28) -> void:
+	_speed_lines_timer = maxf(_speed_lines_timer, duration_sec)
 	queue_redraw()
 
 func _draw() -> void:
@@ -121,6 +135,21 @@ func _draw() -> void:
 	var magenta := Color(1.0, 0.18, 0.576, 1.0)
 	var gold := Color(1.0, 0.76, 0.12, 1.0)
 	var white := Color(0.98, 0.98, 1.0, 1.0)
+
+	# 0. ACTION SPEED LINES & STEAL TRANSFORMATION FLASH (Passo 4 Game Feel)
+	if _flash_timer > 0.0:
+		var flash_alpha: float = clampf(_flash_timer / 0.22, 0.0, 1.0) * 0.22
+		draw_rect(Rect2(Vector2.ZERO, rect_size), Color(1.0, 0.86, 0.35, flash_alpha), true)
+	if _speed_lines_timer > 0.0:
+		var line_alpha: float = clampf(_speed_lines_timer / 0.45, 0.35, 1.0) * 0.88
+		var center_pt := Vector2(rect_size.x * 0.5, rect_size.y * 0.54)
+		for l_i: int in range(18):
+			var ang: float = float(l_i) * (TAU / 18.0) + 0.16
+			var dir := Vector2(cos(ang), sin(ang))
+			var p_in: Vector2 = center_pt + dir * 205.0
+			var p_out: Vector2 = center_pt + dir * 340.0
+			var l_col: Color = Color(1.0, 0.94, 0.48, line_alpha) if (l_i % 2 == 0) else Color(1.0, 0.22, 0.62, line_alpha)
+			draw_line(p_in, p_out, l_col, 3.6)
 
 	# 1. TOP-CENTER: Timer Panel (00:47) with Stopwatch Icon
 	var timer_rect := Rect2(Vector2(rect_size.x * 0.5 - 66.0, 14.0), Vector2(132.0, 42.0))
@@ -186,9 +215,9 @@ func _draw() -> void:
 		_draw_chamfer_panel(f_rect, Color(0.24, 0.04, 0.16, 0.95), magenta, 5.0)
 		draw_string(font, f_rect.position + Vector2(10.0, 19.0), tr(&"HUD_FRENZY_BANNER"), HORIZONTAL_ALIGNMENT_CENTER, 232.0, 13, gold)
 	elif _toast_timer > 0.0 and _toast_text != "":
-		var toast_rect := Rect2(Vector2(rect_size.x * 0.5 - 112.0, 64.0), Vector2(224.0, 30.0))
+		var toast_rect := Rect2(Vector2(rect_size.x - 196.0, 82.0), Vector2(184.0, 28.0))
 		_draw_chamfer_panel(toast_rect, Color(0.10, 0.06, 0.24, 0.96), gold, 5.0)
-		draw_string(font, toast_rect.position + Vector2(12.0, 21.0), _toast_text, HORIZONTAL_ALIGNMENT_CENTER, 200.0, 15, gold)
+		draw_string(font, toast_rect.position + Vector2(8.0, 19.0), _toast_text, HORIZONTAL_ALIGNMENT_CENTER, 168.0, 14, gold)
 
 	# 4. BOTTOM-LEFT: Tutorial Callout ("RUBA I PEZZI!" + 4-Slot Body Diagram)
 	var callout_pos := Vector2(12.0, rect_size.y - 304.0)

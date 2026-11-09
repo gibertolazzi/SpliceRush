@@ -16,6 +16,7 @@ func _initialize() -> void:
 		"test_abomination_activation_and_triple_drop",
 		"test_bot_utility_ai_decisions",
 		"test_90s_match_frenzy_collapse_result_and_rematch",
+		"test_3s_viral_clip_and_game_feel",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -277,5 +278,51 @@ func test_90s_match_frenzy_collapse_result_and_rematch() -> bool:
 	assert_eq(srv.match_phase, MatchServer.MatchPhase.SPAWN, "rematch_resets_to_spawn_phase")
 	assert_eq(srv.collapsed_rings_count, 0, "rematch_restores_collapsed_rings")
 	assert_eq(int(srv.grid_cells[outer_cell]), MatchServer.CellType.FLOOR, "rematch_restores_outer_floor_cells")
+	srv.free()
+	return true
+
+func test_3s_viral_clip_and_game_feel() -> bool:
+	var sc := SoundController.new()
+	root.add_child(sc)
+	assert_true(AudioServer.get_bus_index(&"Music") != -1, "audio_bus_music_exists")
+	assert_true(AudioServer.get_bus_index(&"SFX") != -1, "audio_bus_sfx_exists")
+	assert_true(sc.stream_steal_stinger != null, "steal_stinger_wav_synthesized")
+
+	var srv := MatchServer.new()
+	srv.bots_enabled = false
+	root.add_child(srv)
+	for c: MatchServer.CombatantState in srv.combatants:
+		if c.id >= 2:
+			c.alive = false
+			c.respawn_timer = 999.0
+
+	srv.setup_viral_clip_scenario()
+	var p0: MatchServer.CombatantState = srv.combatants[0]
+	var bot1: MatchServer.CombatantState = srv.combatants[1]
+	assert_eq(p0.slots[PartData.Slot.LEGS], &"spring_legs", "clip_starts_with_spring_legs")
+	assert_eq(p0.is_abomination, false, "clip_starts_not_abomination")
+	assert_eq(bot1.slots[PartData.Slot.ARMS], &"chainsaw_arm", "enemy_has_chainsaw_arm")
+	assert_eq(bot1.slots[PartData.Slot.HEAD], &"laser_eye", "enemy_has_laser_eye")
+
+	# 1. Spring-legs dash + counter-attack kills enemy -> Chainsaw Arm & Laser Eye drop
+	srv.submit_client_input(0, (bot1.pos - p0.pos).normalized(), true)
+	sc.play_dash_sfx()
+	srv.step_simulation(1.0 / 30.0)
+	assert_eq(bot1.alive, false, "clip_enemy_defeated")
+	assert_true(srv.dropped_parts.size() >= 1, "clip_parts_dropped")
+
+	# 2. Steal Chainsaw Arm within 3s -> Transform into Abomination + Stinger!
+	for _i: int in range(15):
+		if not srv.dropped_parts.is_empty():
+			p0.pos = srv.dropped_parts[srv.dropped_parts.size() - 1].pos
+		srv.step_simulation(1.0 / 30.0)
+	sc.play_steal_stinger()
+	sc.play_abomination_stinger()
+
+	assert_eq(p0.slots[PartData.Slot.ARMS], &"chainsaw_arm", "clip_player_stole_chainsaw_arm")
+	assert_eq(p0.is_abomination, true, "clip_player_transformed_into_abomination")
+	assert_eq(sc.current_music_mode, &"abomination", "clip_music_switched_to_abomination")
+
+	sc.free()
 	srv.free()
 	return true
