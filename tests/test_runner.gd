@@ -168,7 +168,7 @@ func test_part_drop_on_kill_and_pickup_transforms_body() -> bool:
 
 	srv.step_simulation(1.0 / 30.0)
 	assert_eq(bot.alive, false, "bot_killed_by_auto_attack")
-	assert_eq(bot.slots[PartData.Slot.ARMS], &"severed_arms", "dead_bot_lost_chainsaw_arm")
+	assert_true(PartCatalog.is_severed(bot.slots[PartData.Slot.ARMS]), "dead_bot_lost_chainsaw_arm")
 	assert_eq(srv.dropped_parts.size(), 1, "one_part_dropped_on_kill")
 	var drop: MatchServer.DroppedPartState = srv.dropped_parts[0]
 	assert_eq(drop.part_id, &"chainsaw_arm", "dropped_part_is_chainsaw_arm")
@@ -473,12 +473,25 @@ func test_severed_limb_debuffs() -> bool:
 	assert_true(is_equal_approx(c.speed_mult, 1.0), "base_speed_mult_is_1")
 	assert_true(is_equal_approx(c.damage_mult, 1.0), "base_damage_mult_is_1")
 
-	# Sever arms -> 0.35 damage multiplier
+	# Sever one arm -> moderate damage debuff (~0.70)
+	c.slots[PartData.Slot.ARMS] = &"severed_one_arm"
+	srv._recalc_combatant_stats(c, false)
+	assert_true(c.damage_mult <= 0.75 and c.damage_mult >= 0.65, "severed_one_arm_applies_moderate_debuff")
+
+	# Sever both arms -> severe damage debuff (~0.35)
 	c.slots[PartData.Slot.ARMS] = &"severed_arms"
 	srv._recalc_combatant_stats(c, false)
 	assert_true(c.damage_mult <= 0.40, "severed_arms_applies_severe_damage_debuff")
 
-	# Sever legs -> 0.50 speed multiplier
+	# Reset arms to isolate leg test
+	c.slots[PartData.Slot.ARMS] = &"base_fist"
+
+	# Sever one leg -> moderate speed debuff (~0.75)
+	c.slots[PartData.Slot.LEGS] = &"severed_one_leg"
+	srv._recalc_combatant_stats(c, false)
+	assert_true(c.speed_mult <= 0.80 and c.speed_mult >= 0.70, "severed_one_leg_applies_moderate_debuff")
+
+	# Sever both legs -> severe speed debuff (~0.50)
 	c.slots[PartData.Slot.LEGS] = &"severed_legs"
 	srv._recalc_combatant_stats(c, false)
 	assert_true(c.speed_mult <= 0.55, "severed_legs_applies_severe_speed_debuff")

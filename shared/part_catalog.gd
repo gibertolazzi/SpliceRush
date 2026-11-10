@@ -97,8 +97,18 @@ static func _ensure_initialized() -> void:
 
 	# SEVERED / MISSING SLOTS
 	_register(
+		&"severed_one_arm", &"PART_SEVERED_ONE_ARM", PartData.Slot.ARMS, PartData.Rarity.COMMON,
+		&"severed_stub_one", 0.70, 1.15, 0.85, 0.95, 0,
+		Color(0.20, 0.18, 0.28), Color(0.35, 0.10, 0.15)
+	)
+	_register(
 		&"severed_arms", &"PART_SEVERED_ARMS", PartData.Slot.ARMS, PartData.Rarity.COMMON,
 		&"severed_stub", 0.35, 1.40, 0.65, 0.85, 0,
+		Color(0.20, 0.18, 0.28), Color(0.35, 0.10, 0.15)
+	)
+	_register(
+		&"severed_one_leg", &"PART_SEVERED_ONE_LEG", PartData.Slot.LEGS, PartData.Rarity.COMMON,
+		&"severed_hop", 0.90, 1.05, 0.95, 0.75, 0,
 		Color(0.20, 0.18, 0.28), Color(0.35, 0.10, 0.15)
 	)
 	_register(
@@ -158,9 +168,29 @@ static func get_base_part_for_slot(slot: PartData.Slot) -> StringName:
 static func get_severed_part_for_slot(slot: PartData.Slot) -> StringName:
 	match slot:
 		PartData.Slot.ARMS:
-			return &"severed_arms"
+			return &"severed_one_arm"
 		PartData.Slot.LEGS:
-			return &"severed_legs"
+			return &"severed_one_leg"
+		PartData.Slot.HEAD:
+			return &"base_head"
+		PartData.Slot.CORE:
+			return &"base_core"
+	return &"base_fist"
+
+static func get_severed_step(current_id: StringName, slot: PartData.Slot) -> StringName:
+	match slot:
+		PartData.Slot.LEGS:
+			if current_id == &"severed_one_leg":
+				return &"severed_legs"
+			elif current_id == &"severed_legs":
+				return &"severed_legs"
+			return &"severed_one_leg"
+		PartData.Slot.ARMS:
+			if current_id == &"severed_one_arm":
+				return &"severed_arms"
+			elif current_id == &"severed_arms":
+				return &"severed_arms"
+			return &"severed_one_arm"
 		PartData.Slot.HEAD:
 			return &"base_head"
 		PartData.Slot.CORE:
@@ -168,7 +198,7 @@ static func get_severed_part_for_slot(slot: PartData.Slot) -> StringName:
 	return &"base_fist"
 
 static func is_severed(part_id: StringName) -> bool:
-	return part_id == &"severed_arms" or part_id == &"severed_legs"
+	return part_id == &"severed_arms" or part_id == &"severed_legs" or part_id == &"severed_one_arm" or part_id == &"severed_one_leg"
 
 static func get_rarity_color(rarity: PartData.Rarity) -> Color:
 	match rarity:

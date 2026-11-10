@@ -511,8 +511,8 @@ func step_simulation(dt: float) -> void:
 				c.pos = _pick_spawn_pos(c.id)
 				c.prev_pos = c.pos
 				c.vel = Vector2.ZERO
-				# If both limbs were severed, restore base limbs on fresh respawn
-				if c.slots.get(PartData.Slot.ARMS) == &"severed_arms" and c.slots.get(PartData.Slot.LEGS) == &"severed_legs":
+				# If limbs were severed, restore base limbs on fresh respawn
+				if PartCatalog.is_severed(c.slots.get(PartData.Slot.ARMS, &"")) and PartCatalog.is_severed(c.slots.get(PartData.Slot.LEGS, &"")):
 					c.slots[PartData.Slot.ARMS] = PartCatalog.get_base_part_for_slot(PartData.Slot.ARMS)
 					c.slots[PartData.Slot.LEGS] = PartCatalog.get_base_part_for_slot(PartData.Slot.LEGS)
 					_recalc_combatant_stats(c, true)
@@ -728,11 +728,9 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 		if dropped_count >= max_drops:
 			break
 		var drop_pid: StringName = victim.slots[slot_to_drop] as StringName
-		var severed_pid: StringName = PartCatalog.get_severed_part_for_slot(slot_to_drop)
-		if severed_pid != &"":
-			victim.slots[slot_to_drop] = severed_pid
-		else:
-			victim.slots[slot_to_drop] = PartCatalog.get_base_part_for_slot(slot_to_drop)
+		var cur_pid: StringName = victim.slots[slot_to_drop] as StringName
+		var severed_pid: StringName = PartCatalog.get_severed_step(cur_pid, slot_to_drop)
+		victim.slots[slot_to_drop] = severed_pid
 
 		var angle: float = _rng.randf_range(0.0, TAU) + float(dropped_count) * 2.1
 		var pop_vel := Vector2(cos(angle), sin(angle)) * balance.part_drop_pop_speed
@@ -740,17 +738,47 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 		dropped_count += 1
 
 	if dropped_count == 0:
-		# If victim only had base parts, sever an arm or leg and drop a bonus part
-		if victim.slots.get(PartData.Slot.ARMS) != &"severed_arms":
-			victim.slots[PartData.Slot.ARMS] = &"severed_arms"
-		elif victim.slots.get(PartData.Slot.LEGS) != &"severed_legs":
+		# If victim only had base parts, progressively sever one limb and drop a bonus part
+		var cur_leg: StringName = victim.slots.get(PartData.Slot.LEGS, &"base_boots")
+		var cur_arm: StringName = victim.slots.get(PartData.Slot.ARMS, &"base_fist")
+		if cur_leg != &"severed_one_leg" and cur_leg != &"severed_legs":
+			victim.slots[PartData.Slot.LEGS] = &"severed_one_leg"
+		elif cur_arm != &"severed_one_arm" and cur_arm != &"severed_arms":
+			victim.slots[PartData.Slot.ARMS] = &"severed_one_arm"
+		elif cur_leg == &"severed_one_leg":
 			victim.slots[PartData.Slot.LEGS] = &"severed_legs"
+		else:
+			victim.slots[PartData.Slot.ARMS] = &"severed_arms"
+
 		var bonus_part: PartData = PartCatalog.pick_random_part(_rng, PartData.Rarity.RARE, PartData.Rarity.EPIC)
 		var angle: float = _rng.randf_range(0.0, TAU)
 		var pop_vel := Vector2(cos(angle), sin(angle)) * balance.part_drop_pop_speed
 		spawn_dropped_part(bonus_part.part_id, victim.pos, pop_vel, false)
 
 	_recalc_combatant_stats(victim, true)
+
+func _strip_single_part_from_combatant(victim: CombatantState, attacker: CombatantState) -> void:
+	var eligible: Array[PartData.Slot] = []
+	for s_key: Variant in victim.slots.keys():
+		var slot_enum: PartData.Slot = s_key as PartData.Slot
+		var pid: StringName = victim.slots[slot_enum] as StringName
+		var base_pid: StringName = PartCatalog.get_base_part_for_slot(slot_enum)
+		if pid != base_pid and not PartCatalog.is_severed(pid):
+			eligible.append(slot_enum)
+	if eligible.is_empty():
+		return
+	var chosen_slot: PartData.Slot = eligible[_rng.randi_range(0, eligible.size() - 1)]
+	var drop_pid: StringName = victim.slots[chosen_slot] as StringName
+	victim.slots[chosen_slot] = PartCatalog.get_severed_step(drop_pid, chosen_slot)
+	_recalc_combatant_stats(victim, true)
+
+	var dir: Vector2 = (victim.pos - attacker.pos).normalized()
+	if dir.length_squared() < 0.01:
+		dir = Vector2.UP
+	var angle: float = dir.angle() + _rng.randf_range(-0.4, 0.4)
+	var pop_vel := Vector2(cos(angle), sin(angle)) * (balance.part_drop_pop_speed * 1.25)
+	spawn_dropped_part(drop_pid, victim.pos + dir * 0.4, pop_vel, false)
+	_record_event(&"part_stripped", attacker.id, victim.id, victim.pos)
 
 func _update_bot_input(bot: CombatantState, _dt: float) -> void:
 	var decision: Dictionary = BotUtilityAI.decide_bot_input(bot, self, get_safe_bounds_xz())
@@ -805,6 +833,10 @@ func _try_auto_attack(attacker: CombatantState, force_manual: bool = false) -> b
 		if target.hp <= 0:
 			_handle_combatant_death(target, attacker)
 		else:
+			# Dynamic Part Snatch: 25% chance on high-damage attack to knock a piece straight off an opponent!
+			if eff_damage >= 18 and not target.is_abomination:
+				if _rng.randf() < 0.25:
+					_strip_single_part_from_combatant(target, attacker)
 			_record_event(&"attack", attacker.id, target.id, target.pos)
 		attack_performed.emit(attacker.id, target.id, attacker.pos, target.pos, eff_damage)
 		return true

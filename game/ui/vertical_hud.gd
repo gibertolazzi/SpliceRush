@@ -1,7 +1,8 @@
 class_name VerticalHUD
 extends Control
 
-signal rematch_requested()
+signal rematch_requested
+signal customize_requested()
 
 var time_remaining_sec: float = 90.0
 var stolen_parts_count: int = 0
@@ -27,7 +28,8 @@ var _toast_text: String = ""
 var _toast_timer: float = 0.0
 var _flash_timer: float = 0.0
 var _speed_lines_timer: float = 0.0
-var _rematch_btn_rect := Rect2(Vector2(110.0, 560.0), Vector2(320.0, 58.0))
+var _rematch_btn_rect := Rect2(Vector2(110.0, 560.0), Vector2(320.0, 48.0))
+var _customize_btn_rect := Rect2(Vector2(110.0, 614.0), Vector2(320.0, 36.0))
 var overhead_combatant_data: Array[Dictionary] = []
 
 var intro_tutorial_timer: float = 6.0
@@ -73,14 +75,22 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
-		if st.pressed and _rematch_btn_rect.has_point(st.position):
-			rematch_requested.emit()
-			get_viewport().set_input_as_handled()
+		if st.pressed:
+			if _rematch_btn_rect.has_point(st.position):
+				rematch_requested.emit()
+				get_viewport().set_input_as_handled()
+			elif _customize_btn_rect.has_point(st.position):
+				customize_requested.emit()
+				get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and _rematch_btn_rect.has_point(mb.position):
-			rematch_requested.emit()
-			get_viewport().set_input_as_handled()
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			if _rematch_btn_rect.has_point(mb.position):
+				rematch_requested.emit()
+				get_viewport().set_input_as_handled()
+			elif _customize_btn_rect.has_point(mb.position):
+				customize_requested.emit()
+				get_viewport().set_input_as_handled()
 	elif event.is_action_pressed(&"ui_accept") or event.is_action_pressed(&"ability_action"):
 		rematch_requested.emit()
 		get_viewport().set_input_as_handled()
@@ -339,13 +349,17 @@ func _draw() -> void:
 			var row_label: String = "#%d  [%s] #%d   —   %d" % [r_i + 1, badge_str, int(entry["id"]) + 1, int(entry["total_mass"])]
 			draw_string(font_regular, row_rect.position + Vector2(14.0, 26.0), row_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, gold if is_player_row else white)
 
-		_rematch_btn_rect = Rect2(Vector2(rect_size.x * 0.5 - 165.0, card_rect.end.y - 92.0), Vector2(330.0, 58.0))
+		_rematch_btn_rect = Rect2(Vector2(rect_size.x * 0.5 - 165.0, card_rect.end.y - 108.0), Vector2(330.0, 46.0))
 		_draw_chamfer_panel(_rematch_btn_rect, magenta, gold, 8.0)
-		draw_string(font_bold, _rematch_btn_rect.position + Vector2(12.0, 39.0), tr(&"HUD_REMATCH_BTN"), HORIZONTAL_ALIGNMENT_CENTER, 306.0, 22, white)
+		draw_string(font_bold, _rematch_btn_rect.position + Vector2(12.0, 31.0), tr(&"HUD_REMATCH_BTN"), HORIZONTAL_ALIGNMENT_CENTER, 306.0, 20, white)
+
+		_customize_btn_rect = Rect2(Vector2(rect_size.x * 0.5 - 165.0, card_rect.end.y - 56.0), Vector2(330.0, 36.0))
+		_draw_chamfer_panel(_customize_btn_rect, Color(0.16, 0.14, 0.32, 0.95), border_col, 6.0)
+		draw_string(font_bold, _customize_btn_rect.position + Vector2(12.0, 25.0), tr(&"BTN_CUSTOMIZE"), HORIZONTAL_ALIGNMENT_CENTER, 306.0, 16, gold)
 
 		# 5-second countdown bar at bottom of result card
 		var bar_w: float = 330.0 * clampf(result_countdown_sec / 5.0, 0.0, 1.0)
-		draw_rect(Rect2(Vector2(_rematch_btn_rect.position.x, card_rect.end.y - 22.0), Vector2(bar_w, 6.0)), gold, true)
+		draw_rect(Rect2(Vector2(_rematch_btn_rect.position.x, card_rect.end.y - 12.0), Vector2(bar_w, 4.0)), gold, true)
 
 func _draw_animated_intro_tutorial(rect_size: Vector2) -> void:
 	if intro_tutorial_timer <= 0.0 or show_result_overlay:

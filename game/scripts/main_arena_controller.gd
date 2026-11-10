@@ -6,9 +6,13 @@ extends Node3D
 var server: MatchServer
 var arena_builder: ArenaBuilder3D
 var sound_controller: SoundController
+const CustomizationMenuScript := preload("res://game/ui/customization_menu.gd")
+
 var camera: Camera3D
 var hud: VerticalHUD
 var virtual_joystick: TouchJoystick
+var customization_menu: Control
+var is_customizing: bool = false
 var fighter_nodes: Array[BlockyFighter3D] = []
 var attack_fx_pool: Array[MeshInstance3D] = []
 var active_attack_fx: Array[Dictionary] = []
@@ -18,6 +22,7 @@ var kill_cam_timer: float = 0.0
 var kill_cam_focus_xz: Vector2 = Vector2.ZERO
 var hit_stop_active: bool = false
 var target_ring_mesh: MeshInstance3D
+var _custom_hero_yaw: float = 0.0
 
 var _joystick_vec: Vector2 = Vector2.ZERO
 var _ability_queued: bool = false
@@ -31,12 +36,23 @@ var _preview_result: bool = false
 var _preview_clip: bool = false
 var _preview_tutorial_phase2: bool = false
 var _preview_tutorial_dismissed: bool = false
+var _preview_customize: bool = false
+var _preview_loading: bool = false
+var _preview_one_leg: bool = false
+var _skip_customize: bool = false
 var _requested_map_theme: int = -1
 var _web_first_frame_reported: bool = false
 var _web_first_input_reported: bool = false
 
 func _ready() -> void:
 	_parse_cmdline_args()
+	if _preview_customize:
+		is_customizing = true
+	elif _simulate_input_preview or _preview_frenzy or _preview_result or _preview_clip or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1:
+		is_customizing = false
+	else:
+		is_customizing = true
+
 	_setup_audio()
 	_setup_environment_and_lights()
 	_setup_camera()
@@ -44,12 +60,23 @@ func _ready() -> void:
 	if _requested_map_theme != -1:
 		server.set_map_theme(_requested_map_theme)
 	_setup_ui()
+	if _preview_loading and customization_menu != null:
+		customization_menu.is_loading = true
+		customization_menu.loading_progress = 0.65
 	if _preview_frenzy:
 		server.match_elapsed_sec = balance.frenzy_start_sec - 0.02
 	if _preview_result:
 		server.match_elapsed_sec = balance.match_duration_sec - 0.05
 	if _preview_clip:
 		_stage_viral_clip_moment()
+	if _preview_one_leg and not server.combatants.is_empty():
+		var p0: MatchServer.CombatantState = server.combatants[0]
+		p0.slots[PartData.Slot.LEGS] = &"severed_one_leg"
+		p0.slots[PartData.Slot.ARMS] = &"chainsaw_arm"
+		p0.slots[PartData.Slot.HEAD] = &"laser_eye"
+		server._recalc_combatant_stats(p0, true)
+		if not fighter_nodes.is_empty():
+			fighter_nodes[0].apply_slots(p0.slots, false, false)
 	if _preview_tutorial_phase2 and hud != null:
 		hud.intro_tutorial_timer = 2.4
 		hud._intro_elapsed = 3.6
@@ -87,6 +114,14 @@ func _parse_cmdline_args() -> void:
 			_requested_map_theme = MatchServer.MapTheme.CYBER_FACTORY
 		elif arg == "--map-theme=hex":
 			_requested_map_theme = MatchServer.MapTheme.FLOATING_HEX
+		elif arg == "--preview-customize":
+			_preview_customize = true
+		elif arg == "--preview-loading":
+			_preview_loading = true
+		elif arg == "--preview-one-leg":
+			_preview_one_leg = true
+		elif arg == "--skip-customize" or arg == "--instant-match":
+			_skip_customize = true
 
 func _setup_audio() -> void:
 	sound_controller = SoundController.new()
@@ -162,8 +197,12 @@ func _setup_camera() -> void:
 	camera.fov = balance.camera_fov_deg
 	camera.near = 0.2
 	camera.far = 95.0
-	camera.position = Vector3(0.0, balance.camera_distance, 15.0)
-	camera.rotation_degrees = Vector3(balance.camera_pitch_deg, 0.0, 0.0)
+	if is_customizing:
+		camera.position = Vector3(0.0, 1.25, 3.45)
+		camera.rotation_degrees = Vector3(-7.0, 0.0, 0.0)
+	else:
+		camera.position = Vector3(0.0, balance.camera_distance, 15.0)
+		camera.rotation_degrees = Vector3(balance.camera_pitch_deg, 0.0, 0.0)
 	add_child(camera)
 	camera.make_current()
 
@@ -174,12 +213,22 @@ func _setup_server_and_world() -> void:
 	for arg: String in OS.get_cmdline_user_args():
 		if arg == "--static-preview":
 			server.bots_enabled = false
+	if is_customizing:
+		server.bots_enabled = false
+		if not server.combatants.is_empty():
+			server.combatants[0].pos = Vector2.ZERO
+			server.combatants[0].prev_pos = Vector2.ZERO
+			server.combatants[0].facing_angle = -PI * 0.5
 	add_child(server)
 
 	arena_builder = ArenaBuilder3D.new()
 	arena_builder.name = "ArenaBuilder3D"
 	add_child(arena_builder)
 	arena_builder.build_from_server(server)
+	if is_customizing:
+		var ped: Node = arena_builder.get_node_or_null("PowerPedestal")
+		if ped != null:
+			ped.set("visible", false)
 
 	fighter_nodes.clear()
 	for c: MatchServer.CombatantState in server.combatants:
@@ -187,6 +236,8 @@ func _setup_server_and_world() -> void:
 		fn.name = "Fighter_%d" % c.id
 		add_child(fn)
 		fn.setup_fighter(c.id, c.is_bot, c.base_color, c.shape_id, c.slots, c.is_abomination)
+		if is_customizing and c.id != 0:
+			fn.visible = false
 		fn.update_visual_state(c.pos, c.vel, c.facing_angle, 0.0, 0.0, c.alive, 0.016)
 		fighter_nodes.append(fn)
 
@@ -238,10 +289,20 @@ func _setup_ui() -> void:
 	layer.name = "HUDLayer"
 	add_child(layer)
 
+	customization_menu = CustomizationMenuScript.new()
+	customization_menu.name = "CustomizationMenu"
+	customization_menu.visible = is_customizing
+	customization_menu.part_selected.connect(_on_custom_part_selected)
+	customization_menu.color_selected.connect(_on_custom_color_selected)
+	customization_menu.hero_rotated.connect(_on_custom_hero_rotated)
+	customization_menu.play_pressed.connect(_on_custom_play_pressed)
+	layer.add_child(customization_menu)
+
 	virtual_joystick = TouchJoystick.new()
 	virtual_joystick.name = "VirtualJoystick"
 	virtual_joystick.deadzone = balance.joystick_deadzone
 	virtual_joystick.max_radius_px = balance.joystick_max_radius_px
+	virtual_joystick.visible = not is_customizing
 	layer.add_child(virtual_joystick)
 	virtual_joystick.joystick_updated.connect(_on_joystick_updated)
 	virtual_joystick.ability_triggered.connect(_on_ability_triggered)
@@ -249,8 +310,10 @@ func _setup_ui() -> void:
 
 	hud = VerticalHUD.new()
 	hud.name = "VerticalHUD"
+	hud.visible = not is_customizing
 	layer.add_child(hud)
 	hud.rematch_requested.connect(_on_hud_rematch_requested)
+	hud.customize_requested.connect(_on_hud_customize_requested)
 	if not server.combatants.is_empty():
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)
@@ -297,6 +360,8 @@ func _on_ability_triggered() -> void:
 		hud.intro_tutorial_timer = minf(hud.intro_tutorial_timer, 0.8)
 
 func _physics_process(_delta: float) -> void:
+	if is_customizing:
+		return
 	var kb_vec: Vector2 = Input.get_vector(&"move_left", &"move_right", &"move_up", &"move_down", balance.joystick_deadzone)
 	var combined: Vector2 = _joystick_vec if _joystick_vec.length_squared() > kb_vec.length_squared() else kb_vec
 	if Input.is_action_just_pressed(&"attack_action"):
@@ -317,6 +382,18 @@ func _process(delta: float) -> void:
 	_frame_counter += 1
 	if OS.has_feature("web"):
 		_update_web_telemetry()
+
+	if is_customizing:
+		if not fighter_nodes.is_empty():
+			var fn: BlockyFighter3D = fighter_nodes[0]
+			fn.global_position = Vector3(0.0, 0.0, 0.0)
+			fn.update_visual_state(Vector2.ZERO, Vector2.ZERO, PI * 0.5, 0.0, 0.0, true, delta, false)
+			fn.pivot.rotation.y = _custom_hero_yaw
+		if _screenshot_path != "" and _frame_counter >= _target_screenshot_frame:
+			var img: Image = get_viewport().get_texture().get_image()
+			img.save_png(_screenshot_path)
+			get_tree().quit(0)
+		return
 
 	var alpha: float = clampf(Engine.get_physics_interpolation_fraction(), 0.0, 1.0)
 	for i: int in range(server.combatants.size()):
@@ -340,7 +417,7 @@ func _process(delta: float) -> void:
 		get_tree().quit(0)
 
 func _update_camera_follow(dt: float) -> void:
-	if server.combatants.is_empty():
+	if is_customizing or server.combatants.is_empty():
 		return
 	var player_state: MatchServer.CombatantState = server.combatants[0]
 	var focus_pos: Vector2 = player_state.pos
@@ -524,3 +601,83 @@ func _update_web_telemetry() -> void:
 		var fps: float = Engine.get_frames_per_second()
 		var dc: float = Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
 		JavaScriptBridge.eval("if(window.__spliceRushMetrics){window.__spliceRushMetrics.fpsSamples.push(%.1f);window.__spliceRushMetrics.drawCalls=%d;}" % [fps, int(dc)])
+
+func _on_custom_part_selected(slot: int, part_id: StringName) -> void:
+	if fighter_nodes.is_empty() or customization_menu == null:
+		return
+	var fn: BlockyFighter3D = fighter_nodes[0]
+	var slots: Dictionary = customization_menu.equipped_slots.duplicate()
+	slots[slot] = part_id
+	fn.apply_slots(slots, false, true)
+	if sound_controller != null:
+		sound_controller.play_pickup_pop()
+
+func _on_custom_color_selected(col: Color) -> void:
+	if fighter_nodes.is_empty():
+		return
+	var fn: BlockyFighter3D = fighter_nodes[0]
+	if fn.char_mesh != null:
+		var mat: Material = fn.char_mesh.get_surface_override_material(0)
+		if mat is StandardMaterial3D:
+			mat.albedo_color = col
+
+func _on_custom_hero_rotated(dx: float) -> void:
+	_custom_hero_yaw += dx * 0.018
+
+func _on_custom_play_pressed(slots: Dictionary, col: Color) -> void:
+	is_customizing = false
+	var ped: Node = arena_builder.get_node_or_null("PowerPedestal")
+	if ped != null:
+		ped.set("visible", true)
+	if customization_menu != null:
+		customization_menu.visible = false
+	if hud != null:
+		hud.visible = true
+	if virtual_joystick != null:
+		virtual_joystick.visible = true
+	server.bots_enabled = true
+	for fn: BlockyFighter3D in fighter_nodes:
+		fn.visible = true
+
+	# Equip chosen loadout on player 0
+	if not server.combatants.is_empty():
+		var p0: MatchServer.CombatantState = server.combatants[0]
+		p0.slots = slots.duplicate()
+		p0.base_color = col
+		server._recalc_combatant_stats(p0, true)
+	if not fighter_nodes.is_empty():
+		fighter_nodes[0].apply_slots(slots, false, true)
+		if fighter_nodes[0].char_mesh != null:
+			var mat: Material = fighter_nodes[0].char_mesh.get_surface_override_material(0)
+			if mat is StandardMaterial3D:
+				mat.albedo_color = col
+
+	# Smooth camera sweep to arena battle view
+	var safe_b: Vector2 = server.get_safe_bounds_xz()
+	var target_z: float = clampf(balance.camera_z_bias, -safe_b.y + balance.camera_z_bias, safe_b.y + balance.camera_z_bias)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(camera, "position", Vector3(0.0, balance.camera_distance, target_z), 0.85).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(camera, "rotation_degrees:x", balance.camera_pitch_deg, 0.85).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+	if sound_controller != null:
+		sound_controller.play_steal_stinger()
+
+func _on_hud_customize_requested() -> void:
+	server.reset_match()
+	is_customizing = true
+	if customization_menu != null:
+		customization_menu.visible = true
+		customization_menu.is_loading = false
+	if hud != null:
+		hud.visible = false
+		hud.show_result_overlay = false
+	if virtual_joystick != null:
+		virtual_joystick.visible = false
+	server.bots_enabled = false
+	camera.position = Vector3(0.0, 1.45, 3.4)
+	camera.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
+	if not fighter_nodes.is_empty():
+		fighter_nodes[0].position = Vector3.ZERO
+		fighter_nodes[0].rotation = Vector3.ZERO
+	for i: int in range(1, fighter_nodes.size()):
+		fighter_nodes[i].visible = false

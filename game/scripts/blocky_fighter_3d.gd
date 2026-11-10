@@ -353,8 +353,8 @@ func trigger_transform_pop() -> void:
 
 func _get_target_base_scale() -> float:
 	if fighter_id == 0:
-		return 1.35 if is_abomination else 1.08
-	return 1.32 if is_abomination else 0.95
+		return 1.65 if is_abomination else 1.28
+	return 1.50 if is_abomination else 1.15
 
 func _populate_head_socket(part_id: StringName) -> void:
 	_clear_socket(head_socket)
@@ -381,6 +381,22 @@ func _populate_arm_sockets(part_id: StringName) -> void:
 	_clear_socket(right_arm_socket)
 
 	match part_id:
+		&"severed_one_arm":
+			# Left Arm: severed socket stump with sparks
+			_set_bone_scale(_bone_left_arm, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_left_forearm, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_left_hand, Vector3(0.001, 0.001, 0.001))
+			# Right Arm: intact muscular arm
+			_set_bone_scale(_bone_right_arm, Vector3.ONE)
+			_set_bone_scale(_bone_right_forearm, Vector3.ONE)
+			_set_bone_scale(_bone_right_hand, Vector3.ONE)
+
+			var socket_mat: ShaderMaterial = _shared_dark_mat
+			var spark_mat: StandardMaterial3D = _make_unshaded_mat(Color(1.0, 0.25, 0.20))
+			_add_box(left_arm_socket, Vector3(0.24, 0.22, 0.24), Vector3(0.0, -0.09, 0.0), socket_mat)
+			_add_box(left_arm_socket, Vector3(0.16, 0.08, 0.16), Vector3(0.0, -0.22, 0.0), spark_mat)
+			play_shatter_vfx(left_arm_socket.position)
+
 		&"severed_arms":
 			# Hide skinned hero arms
 			_set_bone_scale(_bone_left_arm, Vector3(0.001, 0.001, 0.001))
@@ -454,6 +470,22 @@ func _populate_leg_sockets(part_id: StringName) -> void:
 	rocket_flame = null
 
 	match part_id:
+		&"severed_one_leg":
+			# Right Leg: severed peg stump with warning accent
+			_set_bone_scale(_bone_right_upleg, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_right_leg, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_right_foot, Vector3(0.001, 0.001, 0.001))
+			# Left Leg: authentic full rocket boot remains intact!
+			_set_bone_scale(_bone_left_upleg, Vector3.ONE)
+			_set_bone_scale(_bone_left_leg, Vector3.ONE)
+			_set_bone_scale(_bone_left_foot, Vector3.ONE)
+
+			var peg_mat: ShaderMaterial = _shared_dark_mat
+			var warning_mat: StandardMaterial3D = _make_unshaded_mat(Color(1.0, 0.25, 0.20))
+			_add_box(right_leg_socket, Vector3(0.20, 0.20, 0.20), Vector3(0.0, -0.08, 0.0), peg_mat)
+			_add_box(right_leg_socket, Vector3(0.14, 0.06, 0.14), Vector3(0.0, -0.19, 0.0), warning_mat)
+			play_shatter_vfx(right_leg_socket.position)
+
 		&"severed_legs":
 			# Hide skinned hero legs
 			_set_bone_scale(_bone_left_upleg, Vector3(0.001, 0.001, 0.001))
@@ -580,11 +612,17 @@ func update_visual_state(
 	else:
 		right_arm_socket.rotation_degrees.x = lerpf(right_arm_socket.rotation_degrees.x, 0.0, minf(1.0, 14.0 * dt))
 
-	# Severed legs limping wobble
-	var has_severed_legs: bool = (current_slots.get(PartData.Slot.LEGS) == &"severed_legs")
+	# Severed legs limping wobble & hopping
+	var legs_slot: StringName = current_slots.get(PartData.Slot.LEGS, &"")
+	var has_severed_legs: bool = (legs_slot == &"severed_legs")
+	var has_severed_one_leg: bool = (legs_slot == &"severed_one_leg")
 	if is_moving:
 		_walk_phase += (3.5 + speed * 1.5) * dt
-		if has_severed_legs:
+		if has_severed_one_leg:
+			# Hopping on single remaining leg: distinct vertical hop and asymmetric tilt!
+			pivot.position.y = -0.06 + absf(sin(_walk_phase * 1.6)) * 0.16
+			pivot.rotation_degrees.z = sin(_walk_phase * 1.6) * 13.0
+		elif has_severed_legs:
 			pivot.position.y = -0.12 + absf(sin(_walk_phase)) * 0.05
 			pivot.rotation_degrees.z = sin(_walk_phase) * 7.0
 		else:
@@ -595,7 +633,7 @@ func update_visual_state(
 		pivot.rotation_degrees.z = lerpf(pivot.rotation_degrees.z, 0.0, minf(1.0, 12.0 * dt))
 
 	if rocket_flame != null:
-		if is_moving and not has_severed_legs:
+		if is_moving and not has_severed_legs and not has_severed_one_leg:
 			var pulse: float = 0.85 + 0.35 * sin(float(Time.get_ticks_msec()) * 0.02)
 			rocket_flame.scale = Vector3(pulse, 0.90 + 0.40 * pulse, pulse)
 			rocket_flame.visible = true
