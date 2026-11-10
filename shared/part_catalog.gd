@@ -236,6 +236,43 @@ static func get_slot_name_translation_key(slot: PartData.Slot) -> StringName:
 			return &"SLOT_NAME_CORE"
 	return &"SLOT_NAME_ARMS"
 
+static func get_part_trait_description(part_id: StringName) -> String:
+	match part_id:
+		&"laser_eye":
+			return "Portata +45%, Danno +35% (Raggio Laser)"
+		&"visor_head":
+			return "Portata +18%, Mira Rapida"
+		&"spike_helm":
+			return "Danno +22%, Difesa Cresta"
+		&"base_head":
+			return "Bilanciamento Standard (Testa Base)"
+		&"chainsaw_arm":
+			return "Danno +32%, Cadenza Taglio x1.2"
+		&"giant_fist":
+			return "Danno +28%, Contraccolpo Pesante"
+		&"mega_claws":
+			return "Danno +48%, Lacerazione Rapida"
+		&"base_fist":
+			return "Bilanciamento Standard (Pugno Base)"
+		&"rocket_legs":
+			return "Velocità +35%, Fiammata Posteriore"
+		&"roller_wheels":
+			return "Velocità +28%, Virata Fluida"
+		&"spring_legs":
+			return "Scatto Elastico +30%"
+		&"base_boots":
+			return "Bilanciamento Standard (Stivali Base)"
+		&"crown_core":
+			return "Aura Reale, Status Abominio +40%"
+		&"shield_core":
+			return "Resistenza Danni, Scudo Assorbente"
+		&"magnet_core":
+			return "Raggio Attrazione Drop +50%"
+		&"base_core":
+			return "Bilanciamento Standard (Reattore Base)"
+		_:
+			return "Pezzo Speciale"
+
 static func compute_slots_mass(slots: Dictionary) -> int:
 	_ensure_initialized()
 	var total: int = 0

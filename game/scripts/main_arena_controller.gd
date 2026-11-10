@@ -25,7 +25,14 @@ var _hit_stop_id: int = 0
 var _pending_combatant_slots: Dictionary = {}
 var _flying_parts_in_flight: Dictionary = {}
 var target_ring_mesh: MeshInstance3D
-var _custom_hero_yaw: float = 0.0
+var _custom_hero_yaw: float = -0.28
+
+var customize_stage_root: Node3D
+var customize_floating_cubes: Array[Dictionary] = []
+var customize_light_shaft: MeshInstance3D
+var customize_spotlight: SpotLight3D
+var customize_fill_light: OmniLight3D
+var _custom_stage_time: float = 0.0
 
 var _joystick_vec: Vector2 = Vector2.ZERO
 var _ability_queued: bool = false
@@ -46,6 +53,7 @@ var _preview_one_leg: bool = false
 var _preview_last10s: bool = false
 var _skip_customize: bool = false
 var _requested_map_theme: int = -1
+var _preview_tab_name: String = ""
 var _web_first_frame_reported: bool = false
 var _web_first_input_reported: bool = false
 
@@ -65,6 +73,16 @@ func _ready() -> void:
 	if _requested_map_theme != -1:
 		server.set_map_theme(_requested_map_theme)
 	_setup_ui()
+	if _preview_tab_name != "" and customization_menu != null:
+		if _preview_tab_name == "arms":
+			customization_menu._switch_tab(CustomizationMenu.TAB_ARMS)
+			customization_menu._select_option(&"chainsaw_arm")
+		elif _preview_tab_name == "legs":
+			customization_menu._switch_tab(CustomizationMenu.TAB_LEGS)
+			customization_menu._select_option(&"rocket_legs")
+		elif _preview_tab_name == "core":
+			customization_menu._switch_tab(CustomizationMenu.TAB_CORE)
+			customization_menu._select_option(&"shield_core")
 	if _preview_loading and customization_menu != null:
 		customization_menu.is_loading = true
 		customization_menu.loading_progress = 0.65
@@ -133,6 +151,9 @@ func _parse_cmdline_args() -> void:
 			_preview_loading = true
 		elif arg == "--preview-one-leg":
 			_preview_one_leg = true
+		elif arg.begins_with("--preview-tab="):
+			_preview_tab_name = arg.trim_prefix("--preview-tab=")
+			_preview_customize = true
 		elif arg == "--skip-customize" or arg == "--instant-match":
 			_skip_customize = true
 
@@ -250,10 +271,13 @@ func _setup_server_and_world() -> void:
 	arena_builder.name = "ArenaBuilder3D"
 	add_child(arena_builder)
 	arena_builder.build_from_server(server)
+	arena_builder.visible = not is_customizing
 	if is_customizing:
 		var ped: Node = arena_builder.get_node_or_null("PowerPedestal")
 		if ped != null:
 			ped.set("visible", false)
+
+	_setup_customization_stage()
 
 	fighter_nodes.clear()
 	for c: MatchServer.CombatantState in server.combatants:
@@ -436,11 +460,30 @@ func _process(delta: float) -> void:
 		_update_web_telemetry()
 
 	if is_customizing:
+		_custom_stage_time += delta
+		for i: int in range(1, fighter_nodes.size()):
+			fighter_nodes[i].visible = false
+
+		if customize_light_shaft != null:
+			customize_light_shaft.rotation.y += delta * 0.35
+		for cube_data: Dictionary in customize_floating_cubes:
+			var c_node: MeshInstance3D = cube_data["node"]
+			var b_pos: Vector3 = cube_data["base_pos"]
+			var spd: float = cube_data["spd"]
+			var amp: float = cube_data["amp"]
+			var phase: float = cube_data["phase"]
+			c_node.position.y = b_pos.y + sin(_custom_stage_time * spd + phase) * amp
+			c_node.rotation.x += delta * (0.8 + 0.3 * sin(phase))
+			c_node.rotation.y += delta * (1.1 + 0.4 * cos(phase))
+
 		if not fighter_nodes.is_empty():
 			var fn: BlockyFighter3D = fighter_nodes[0]
 			fn.global_position = Vector3(0.0, 0.0, 0.0)
 			fn.update_visual_state(Vector2.ZERO, Vector2.ZERO, PI * 0.5, 0.0, 0.0, true, delta, false)
-			fn.pivot.rotation.y = _custom_hero_yaw
+			var breath_y: float = sin(_custom_stage_time * 2.6) * 0.024
+			if fn.pivot != null:
+				fn.pivot.position.y = breath_y
+				fn.pivot.rotation.y = _custom_hero_yaw
 		if _screenshot_path != "" and _frame_counter >= _target_screenshot_frame:
 			var img: Image = get_viewport().get_texture().get_image()
 			img.save_png(_screenshot_path)
@@ -710,8 +753,9 @@ func _on_custom_part_selected(slot: int, part_id: StringName) -> void:
 	var slots: Dictionary = customization_menu.equipped_slots.duplicate()
 	slots[slot] = part_id
 	fn.apply_slots(slots, false, true)
+	fn.trigger_transform_pop()
 	if sound_controller != null:
-		sound_controller.play_pickup_pop()
+		sound_controller.play_equip_sfx()
 
 func _on_custom_color_selected(col: Color) -> void:
 	if fighter_nodes.is_empty():
@@ -721,12 +765,19 @@ func _on_custom_color_selected(col: Color) -> void:
 		var mat: Material = fn.char_mesh.get_surface_override_material(0)
 		if mat is StandardMaterial3D:
 			mat.albedo_color = col
+	fn.trigger_transform_pop()
+	if sound_controller != null:
+		sound_controller.play_equip_sfx()
 
 func _on_custom_hero_rotated(dx: float) -> void:
 	_custom_hero_yaw += dx * 0.018
 
 func _on_custom_play_pressed(slots: Dictionary, col: Color) -> void:
 	is_customizing = false
+	if customize_stage_root != null:
+		customize_stage_root.visible = false
+	if arena_builder != null:
+		arena_builder.visible = true
 	var ped: Node = arena_builder.get_node_or_null("PowerPedestal")
 	if ped != null:
 		ped.set("visible", true)
@@ -766,6 +817,10 @@ func _on_custom_play_pressed(slots: Dictionary, col: Color) -> void:
 func _on_hud_customize_requested() -> void:
 	server.reset_match()
 	is_customizing = true
+	if customize_stage_root != null:
+		customize_stage_root.visible = true
+	if arena_builder != null:
+		arena_builder.visible = false
 	if customization_menu != null:
 		customization_menu.visible = true
 		customization_menu.is_loading = false
@@ -782,3 +837,161 @@ func _on_hud_customize_requested() -> void:
 		fighter_nodes[0].rotation = Vector3.ZERO
 	for i: int in range(1, fighter_nodes.size()):
 		fighter_nodes[i].visible = false
+
+func _setup_customization_stage() -> void:
+	customize_stage_root = Node3D.new()
+	customize_stage_root.name = "CustomizationPedestalStage"
+	add_child(customize_stage_root)
+
+	# 1. Stepped Cylindrical Pedestal
+	var ped_base := MeshInstance3D.new()
+	ped_base.name = "PedestalBase"
+	var base_cyl := CylinderMesh.new()
+	base_cyl.top_radius = 1.75
+	base_cyl.bottom_radius = 1.85
+	base_cyl.height = 0.22
+	ped_base.mesh = base_cyl
+	ped_base.position = Vector3(0.0, -0.22, 0.0)
+	var base_mat := StandardMaterial3D.new()
+	base_mat.albedo_color = Color(0.10, 0.08, 0.18)
+	base_mat.roughness = 0.75
+	ped_base.material_override = base_mat
+	customize_stage_root.add_child(ped_base)
+
+	var ped_top := MeshInstance3D.new()
+	ped_top.name = "PedestalTop"
+	var top_cyl := CylinderMesh.new()
+	top_cyl.top_radius = 1.50
+	top_cyl.bottom_radius = 1.50
+	top_cyl.height = 0.18
+	ped_top.mesh = top_cyl
+	ped_top.position = Vector3(0.0, -0.06, 0.0)
+	var top_mat := StandardMaterial3D.new()
+	top_mat.albedo_color = Color(0.18, 0.14, 0.30)
+	top_mat.roughness = 0.60
+	ped_top.material_override = top_mat
+	customize_stage_root.add_child(ped_top)
+
+	# 2. Glowing Neon Rings on Pedestal Rim
+	var rim_outer := MeshInstance3D.new()
+	rim_outer.name = "RimOuter"
+	var torus_mesh := TorusMesh.new()
+	torus_mesh.inner_radius = 1.46
+	torus_mesh.outer_radius = 1.54
+	rim_outer.mesh = torus_mesh
+	rim_outer.position = Vector3(0.0, 0.02, 0.0)
+	var rim_mat := StandardMaterial3D.new()
+	rim_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rim_mat.albedo_color = Color(1.0, 0.78, 0.15) # Gold neon rim
+	rim_outer.material_override = rim_mat
+	customize_stage_root.add_child(rim_outer)
+
+	var rim_inner := MeshInstance3D.new()
+	rim_inner.name = "RimInner"
+	var torus_inner := TorusMesh.new()
+	torus_inner.inner_radius = 0.88
+	torus_inner.outer_radius = 0.92
+	rim_inner.mesh = torus_inner
+	rim_inner.position = Vector3(0.0, 0.022, 0.0)
+	var inner_mat := StandardMaterial3D.new()
+	inner_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	inner_mat.albedo_color = Color(1.0, 0.18, 0.58) # Magenta neon ring
+	rim_inner.material_override = inner_mat
+	customize_stage_root.add_child(rim_inner)
+
+	# 3. Overhead Spotlight (Faro)
+	customize_spotlight = SpotLight3D.new()
+	customize_spotlight.name = "StageSpotlight"
+	customize_spotlight.position = Vector3(0.0, 4.4, 1.8)
+	customize_spotlight.rotation_degrees = Vector3(-62.0, 0.0, 0.0)
+	customize_spotlight.light_color = Color(1.0, 0.96, 0.90)
+	customize_spotlight.light_energy = 3.6
+	customize_spotlight.spot_range = 10.0
+	customize_spotlight.spot_angle = 38.0
+	customize_stage_root.add_child(customize_spotlight)
+
+	# Fill light
+	customize_fill_light = OmniLight3D.new()
+	customize_fill_light.name = "StageFillLight"
+	customize_fill_light.position = Vector3(0.0, 1.4, 2.5)
+	customize_fill_light.light_color = Color(0.55, 0.45, 0.85)
+	customize_fill_light.light_energy = 1.8
+	customize_fill_light.omni_range = 6.0
+	customize_stage_root.add_child(customize_fill_light)
+
+	# 4. Radiant Light Shaft (Raggi di luce)
+	customize_light_shaft = MeshInstance3D.new()
+	customize_light_shaft.name = "StageLightShaft"
+	var shaft_cyl := CylinderMesh.new()
+	shaft_cyl.top_radius = 0.55
+	shaft_cyl.bottom_radius = 1.95
+	shaft_cyl.height = 5.2
+	customize_light_shaft.mesh = shaft_cyl
+	customize_light_shaft.position = Vector3(0.0, 2.4, -0.4)
+	var shaft_mat := StandardMaterial3D.new()
+	shaft_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	shaft_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	shaft_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	shaft_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	shaft_mat.albedo_color = Color(1.0, 0.82, 0.28, 0.16)
+	customize_light_shaft.material_override = shaft_mat
+	customize_stage_root.add_child(customize_light_shaft)
+
+	# 5. Floating Bobbing Cubes (Cubi fluttuanti)
+	customize_floating_cubes.clear()
+	var cube_configs: Array[Dictionary] = [
+		{ "pos": Vector3(-1.8, 1.2, -0.4), "sz": 0.20, "col": Color(1.0, 0.78, 0.15), "spd": 1.8, "amp": 0.12, "phase": 0.0 },
+		{ "pos": Vector3(1.7, 1.5, -0.3), "sz": 0.18, "col": Color(1.0, 0.18, 0.58), "spd": 2.2, "amp": 0.14, "phase": 1.2 },
+		{ "pos": Vector3(-1.4, 2.4, -0.8), "sz": 0.14, "col": Color(0.18, 0.88, 1.0), "spd": 1.5, "amp": 0.10, "phase": 2.5 },
+		{ "pos": Vector3(1.5, 2.2, -0.7), "sz": 0.16, "col": Color(1.0, 0.78, 0.15), "spd": 1.9, "amp": 0.11, "phase": 3.8 },
+		{ "pos": Vector3(-0.9, 3.1, -1.0), "sz": 0.22, "col": Color(0.75, 0.45, 1.0), "spd": 1.4, "amp": 0.15, "phase": 4.5 },
+		{ "pos": Vector3(0.9, 3.3, -1.0), "sz": 0.15, "col": Color(0.25, 0.95, 0.45), "spd": 2.0, "amp": 0.12, "phase": 5.2 },
+		{ "pos": Vector3(-2.1, 0.6, 0.2), "sz": 0.16, "col": Color(1.0, 0.18, 0.58), "spd": 1.6, "amp": 0.08, "phase": 1.7 },
+		{ "pos": Vector3(2.0, 0.7, 0.1), "sz": 0.14, "col": Color(1.0, 0.78, 0.15), "spd": 2.4, "amp": 0.09, "phase": 3.1 },
+		{ "pos": Vector3(-1.2, 0.3, 0.9), "sz": 0.12, "col": Color(0.18, 0.88, 1.0), "spd": 2.1, "amp": 0.07, "phase": 0.8 },
+		{ "pos": Vector3(1.3, 0.4, 0.8), "sz": 0.13, "col": Color(0.75, 0.45, 1.0), "spd": 1.7, "amp": 0.08, "phase": 4.0 },
+	]
+	for cfg: Dictionary in cube_configs:
+		var c_mesh := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		var sz: float = cfg["sz"] as float
+		bm.size = Vector3(sz, sz, sz)
+		c_mesh.mesh = bm
+		c_mesh.position = cfg["pos"] as Vector3
+		var c_mat := StandardMaterial3D.new()
+		c_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		c_mat.albedo_color = cfg["col"] as Color
+		c_mesh.material_override = c_mat
+		customize_stage_root.add_child(c_mesh)
+		customize_floating_cubes.append({
+			"node": c_mesh,
+			"base_pos": cfg["pos"] as Vector3,
+			"spd": cfg["spd"] as float,
+			"amp": cfg["amp"] as float,
+			"phase": cfg["phase"] as float
+		})
+
+	# 6. Spark Prisms (Scintille)
+	for si: int in range(8):
+		var p_mesh := MeshInstance3D.new()
+		var pm := PrismMesh.new()
+		pm.size = Vector3(0.06, 0.08, 0.06)
+		p_mesh.mesh = pm
+		var ang: float = float(si) * (TAU / 8.0)
+		var rad: float = 1.15 + 0.35 * sin(float(si) * 2.3)
+		var s_pos := Vector3(cos(ang) * rad, 0.4 + float(si % 4) * 0.4, sin(ang) * rad)
+		p_mesh.position = s_pos
+		var p_mat := StandardMaterial3D.new()
+		p_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		p_mat.albedo_color = Color(1.0, 0.88, 0.35)
+		p_mesh.material_override = p_mat
+		customize_stage_root.add_child(p_mesh)
+		customize_floating_cubes.append({
+			"node": p_mesh,
+			"base_pos": s_pos,
+			"spd": 2.5 + float(si % 3) * 0.5,
+			"amp": 0.15,
+			"phase": float(si) * 0.8
+		})
+
+	customize_stage_root.visible = is_customizing

@@ -23,6 +23,7 @@ func _initialize() -> void:
 		"test_severed_limb_debuffs",
 		"test_multiple_map_themes",
 		"test_combat_juice_and_stolen_flying_part",
+		"test_customization_hangar_stage_and_cards",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -605,4 +606,92 @@ func test_combat_juice_and_stolen_flying_part() -> bool:
 	target_dummy.free()
 	srv.free()
 	ab.free()
+	return true
+
+func test_customization_hangar_stage_and_cards() -> bool:
+	# 1. Test Part Catalog Trait Descriptions for all 16 parts
+	var all_parts: Array[StringName] = [
+		&"laser_eye", &"visor_head", &"spike_helm", &"base_head",
+		&"chainsaw_arm", &"giant_fist", &"mega_claws", &"base_fist",
+		&"rocket_legs", &"roller_wheels", &"spring_legs", &"base_boots",
+		&"crown_core", &"shield_core", &"magnet_core", &"base_core"
+	]
+	for pid: StringName in all_parts:
+		var desc: String = PartCatalog.get_part_trait_description(pid)
+		assert_true(desc != "" and desc != "Pezzo Speciale", "trait_desc_valid_%s" % pid)
+
+	# 2. Test SoundController equip SFX
+	var sc := SoundController.new()
+	root.add_child(sc)
+	sc.play_equip_sfx()
+	assert_eq(sc.last_played_stinger, &"equip", "sound_controller_equip_stinger_played")
+	sc.free()
+
+	# 3. Test I18n translations for customization
+	I18nService.register_translations()
+	TranslationServer.set_locale("it")
+	assert_eq(tr(&"BTN_EQUIP_PART"), "EQUIPA PEZZO", "it_btn_equip_part")
+	assert_eq(tr(&"LABEL_EQUIPPED"), "EQUIPAGGIATO ✓", "it_label_equipped")
+	assert_eq(tr(&"LABEL_TRAIT"), "EFFETTO:", "it_label_trait")
+	assert_eq(tr(&"LABEL_MASS"), "MASSA", "it_label_mass")
+	assert_eq(tr(&"LABEL_SLOT"), "SLOT", "it_label_slot")
+
+	TranslationServer.set_locale("en")
+	assert_eq(tr(&"BTN_EQUIP_PART"), "EQUIP PART", "en_btn_equip_part")
+	assert_eq(tr(&"LABEL_EQUIPPED"), "EQUIPPED ✓", "en_label_equipped")
+	assert_eq(tr(&"LABEL_TRAIT"), "TRAIT:", "en_label_trait")
+	assert_eq(tr(&"LABEL_MASS"), "MASS", "en_label_mass")
+	assert_eq(tr(&"LABEL_SLOT"), "SLOT", "en_label_slot")
+	TranslationServer.set_locale("it")
+
+	# 4. Test CustomizationMenu Selection, Tab Switching & Committing
+	var menu := CustomizationMenu.new()
+	root.add_child(menu)
+	assert_eq(menu.selected_part_id, &"base_head", "custom_menu_initial_head_selected")
+
+	# Switch to ARMS tab
+	menu._switch_tab(CustomizationMenu.TAB_ARMS)
+	assert_eq(menu.current_tab, CustomizationMenu.TAB_ARMS, "custom_menu_tab_arms_active")
+	assert_eq(menu.selected_part_id, &"base_fist", "custom_menu_arms_initial_equipped_selected")
+
+	# Preview unequipped part (e.g. chainsaw_arm)
+	menu._select_option(&"chainsaw_arm")
+	assert_eq(menu.selected_part_id, &"chainsaw_arm", "custom_menu_chainsaw_selected")
+	assert_eq(menu.equipped_slots[PartData.Slot.ARMS], &"base_fist", "equipped_slots_not_changed_until_commit")
+
+	# Commit preview selection
+	menu._commit_preview_selection()
+	assert_eq(menu.equipped_slots[PartData.Slot.ARMS], &"chainsaw_arm", "equipped_slots_committed")
+
+	# Switch to COLOR tab
+	menu._switch_tab(CustomizationMenu.TAB_COLOR)
+	assert_eq(menu.current_tab, CustomizationMenu.TAB_COLOR, "custom_menu_tab_color_active")
+	menu._select_option(Color(0.95, 0.28, 0.28))
+	assert_eq(menu.selected_color, Color(0.95, 0.28, 0.28), "custom_menu_color_selected")
+	menu._commit_preview_selection()
+	assert_eq(menu.equipped_color, Color(0.95, 0.28, 0.28), "custom_menu_color_committed")
+	menu.free()
+
+	# 5. Test 3D Hero Customization Stage in MainArenaController
+	var controller := MainArenaController.new()
+	controller.is_customizing = true
+	root.add_child(controller)
+
+	assert_eq(controller.is_customizing, true, "controller_is_customizing")
+	assert_true(controller.customize_stage_root != null, "stage_root_created")
+	assert_eq(controller.customize_stage_root.visible, true, "stage_root_visible_in_customization")
+	assert_eq(controller.arena_builder.visible, false, "arena_builder_hidden_in_customization")
+	assert_true(controller.customize_spotlight != null, "stage_spotlight_present")
+	assert_true(controller.customize_light_shaft != null, "stage_light_shaft_present")
+	assert_eq(controller.customize_floating_cubes.size(), 18, "stage_18_floating_cubes_and_sparks_present")
+
+	# Test Hero idle breathing simulation
+	controller._process(0.016)
+	assert_true(controller._custom_stage_time > 0.0, "stage_time_advanced")
+
+	# Test Part Selected feedback pop
+	controller._on_custom_part_selected(int(PartData.Slot.HEAD), &"laser_eye")
+	assert_eq(controller.fighter_nodes[0]._transform_flash_timer > 0.0, true, "hero_transform_pop_triggered_on_equip")
+
+	controller.free()
 	return true

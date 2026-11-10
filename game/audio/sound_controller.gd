@@ -11,6 +11,7 @@ var stream_kill: AudioStreamWAV
 var stream_steal_stinger: AudioStreamWAV
 var stream_abom_alarm: AudioStreamWAV
 var stream_dash: AudioStreamWAV
+var stream_equip_pop: AudioStreamWAV
 var stream_music_loop: AudioStreamWAV
 
 var last_played_stinger: StringName = &""
@@ -45,6 +46,7 @@ func _synthesize_all_streams() -> void:
 	stream_steal_stinger = _make_synth_wav(0.42, [330.0, 440.0, 554.37, 659.25, 880.0], false, false)
 	stream_abom_alarm = _make_synth_wav(0.55, [220.0, 440.0, 330.0, 660.0], false, false)
 	stream_dash = _make_synth_wav(0.14, [180.0, 520.0], true, false)
+	stream_equip_pop = _make_synth_wav(0.12, [520.0, 780.0, 1040.0], false, false)
 	stream_music_loop = _make_synth_wav(1.60, [110.0, 130.81, 146.83, 164.81, 146.83, 130.81, 110.0, 98.0], false, true)
 
 func _make_synth_wav(duration_sec: float, freqs: Array[float], add_noise: bool, loop: bool) -> AudioStreamWAV:
@@ -117,6 +119,13 @@ func play_abomination_stinger() -> void:
 func play_dash_sfx() -> void:
 	last_played_stinger = &"dash"
 	_play_on_pool(stream_dash, _rng.randf_range(0.95, 1.08), -3.0)
+
+func play_equip_sfx() -> void:
+	last_played_stinger = &"equip"
+	_play_on_pool(stream_equip_pop, _rng.randf_range(0.96, 1.05), -2.0)
+
+func play_pickup_pop() -> void:
+	play_equip_sfx()
 
 func set_music_intensity(mode: StringName) -> void:
 	current_music_mode = mode

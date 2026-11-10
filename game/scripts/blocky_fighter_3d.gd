@@ -468,13 +468,16 @@ func _populate_arm_sockets(part_id: StringName) -> void:
 			_set_bone_scale(_bone_right_hand, Vector3(0.001, 0.001, 0.001))
 
 			var orange_mat: ShaderMaterial = _make_toon_mat(Color(0.98, 0.44, 0.04), 0.08)
-			var blade_mat: ShaderMaterial = _make_toon_mat(Color(0.85, 0.88, 0.92), 0.06)
-			_add_box(right_arm_socket, Vector3(0.30, 0.32, 0.42), Vector3(0.0, -0.20, 0.20), orange_mat)
-			var blade: MeshInstance3D = _add_box(right_arm_socket, Vector3(0.08, 0.28, 0.95), Vector3(0.0, -0.20, 0.85), blade_mat)
+			var blade_mat: ShaderMaterial = _make_toon_mat(Color(0.48, 0.52, 0.60), 0.08)
+			var edge_mat: ShaderMaterial = _make_toon_mat(Color(0.85, 0.88, 0.94), 0.05)
+			_add_box(right_arm_socket, Vector3(0.28, 0.28, 0.36), Vector3(0.0, -0.20, 0.16), orange_mat)
+			var blade: MeshInstance3D = _add_box(right_arm_socket, Vector3(0.07, 0.22, 0.62), Vector3(0.0, -0.20, 0.56), blade_mat)
+			_add_box(blade, Vector3(0.08, 0.05, 0.60), Vector3(0.0, 0.11, 0.0), edge_mat)
+			_add_box(blade, Vector3(0.08, 0.05, 0.60), Vector3(0.0, -0.11, 0.0), edge_mat)
 			for t_i: int in range(3):
-				var tz: float = -0.25 + float(t_i) * 0.25
-				_add_box(blade, Vector3(0.10, 0.06, 0.08), Vector3(0.0, 0.15, tz), _shared_dark_mat)
-				_add_box(blade, Vector3(0.10, 0.06, 0.08), Vector3(0.0, -0.15, tz), _shared_dark_mat)
+				var tz: float = -0.20 + float(t_i) * 0.20
+				_add_box(blade, Vector3(0.09, 0.04, 0.06), Vector3(0.0, 0.13, tz), _shared_dark_mat)
+				_add_box(blade, Vector3(0.09, 0.04, 0.06), Vector3(0.0, -0.13, tz), _shared_dark_mat)
 
 		&"mega_claws":
 			# Keep arms visible, attach golden power claws to both hands
@@ -583,18 +586,28 @@ func _populate_core_socket(part_id: StringName) -> void:
 
 	match part_id:
 		&"shield_core":
-			_add_box(core_socket, Vector3(0.42, 0.42, 0.08), Vector3.ZERO, _shared_cyan_mat)
-			_add_box(core_socket, Vector3(0.22, 0.22, 0.10), Vector3.ZERO, _shared_white_mat)
+			var shield_mat: ShaderMaterial = _make_toon_mat(Color(0.20, 0.62, 0.96), 0.10)
+			var cross_mat: ShaderMaterial = _make_toon_mat(Color(0.92, 0.94, 0.98), 0.05)
+			_add_box(core_socket, Vector3(0.26, 0.28, 0.05), Vector3(0.0, 0.02, 0.0), shield_mat)
+			_add_box(core_socket, Vector3(0.18, 0.16, 0.05), Vector3(0.0, -0.10, 0.0), shield_mat)
+			_add_box(core_socket, Vector3(0.20, 0.06, 0.07), Vector3(0.0, 0.02, 0.0), cross_mat)
+			_add_box(core_socket, Vector3(0.06, 0.20, 0.07), Vector3(0.0, 0.02, 0.0), cross_mat)
 		&"magnet_core":
-			_add_box(core_socket, Vector3(0.42, 0.36, 0.08), Vector3.ZERO, _shared_magenta_mat)
-			_add_box(core_socket, Vector3(0.12, 0.18, 0.10), Vector3(-0.12, 0.08, 0.0), _shared_gold_mat)
-			_add_box(core_socket, Vector3(0.12, 0.18, 0.10), Vector3(0.12, 0.08, 0.0), _shared_gold_mat)
+			var mag_mat: ShaderMaterial = _make_toon_mat(Color(0.92, 0.20, 0.35), 0.10)
+			var pole_mat: ShaderMaterial = _make_toon_mat(Color(0.85, 0.88, 0.95), 0.05)
+			_add_box(core_socket, Vector3(0.26, 0.08, 0.05), Vector3(0.0, -0.08, 0.0), mag_mat)
+			_add_box(core_socket, Vector3(0.08, 0.18, 0.05), Vector3(-0.09, 0.02, 0.0), mag_mat)
+			_add_box(core_socket, Vector3(0.08, 0.18, 0.05), Vector3(0.09, 0.02, 0.0), mag_mat)
+			_add_box(core_socket, Vector3(0.08, 0.06, 0.06), Vector3(-0.09, 0.12, 0.0), pole_mat)
+			_add_box(core_socket, Vector3(0.08, 0.06, 0.06), Vector3(0.09, 0.12, 0.0), pole_mat)
 		&"crown_core":
-			# 3D Golden Crown on chest
-			_add_box(core_socket, Vector3(0.40, 0.18, 0.06), Vector3(0.0, -0.04, 0.0), _shared_gold_mat)
-			_add_box(core_socket, Vector3(0.08, 0.14, 0.07), Vector3(-0.12, 0.08, 0.0), _shared_gold_mat)
-			_add_box(core_socket, Vector3(0.09, 0.18, 0.07), Vector3(0.0, 0.10, 0.0), _shared_gold_mat)
-			_add_box(core_socket, Vector3(0.08, 0.14, 0.07), Vector3(0.12, 0.08, 0.0), _shared_gold_mat)
+			# 3D Golden Crown on chest with toon shading
+			var crown_mat: ShaderMaterial = _make_toon_mat(Color(1.0, 0.78, 0.15), 0.12)
+			_add_box(core_socket, Vector3(0.28, 0.12, 0.04), Vector3(0.0, -0.02, 0.0), crown_mat)
+			_add_box(core_socket, Vector3(0.06, 0.10, 0.05), Vector3(-0.09, 0.06, 0.0), crown_mat)
+			_add_box(core_socket, Vector3(0.07, 0.13, 0.05), Vector3(0.0, 0.08, 0.0), crown_mat)
+			_add_box(core_socket, Vector3(0.06, 0.10, 0.05), Vector3(0.09, 0.06, 0.0), crown_mat)
+			_add_box(core_socket, Vector3(0.04, 0.04, 0.06), Vector3(0.0, 0.0, 0.01), _shared_red_eye_mat)
 		_:
 			# Default: the model's torso already displays the royal shirt and gold crown!
 			pass
@@ -649,7 +662,8 @@ func update_visual_state(
 	if attack_timer > 0.0:
 		right_arm_socket.rotation_degrees.x = -65.0
 	else:
-		right_arm_socket.rotation_degrees.x = lerpf(right_arm_socket.rotation_degrees.x, 0.0, minf(1.0, 14.0 * dt))
+		var rest_pitch: float = 35.0 if current_slots.get(PartData.Slot.ARMS, &"") == &"chainsaw_arm" else 0.0
+		right_arm_socket.rotation_degrees.x = lerpf(right_arm_socket.rotation_degrees.x, rest_pitch, minf(1.0, 14.0 * dt))
 
 	# Severed legs limping wobble & hopping
 	var legs_slot: StringName = current_slots.get(PartData.Slot.LEGS, &"")
