@@ -31,6 +31,7 @@ var _preview_result: bool = false
 var _preview_clip: bool = false
 var _preview_tutorial_phase2: bool = false
 var _preview_tutorial_dismissed: bool = false
+var _requested_map_theme: int = -1
 var _web_first_frame_reported: bool = false
 var _web_first_input_reported: bool = false
 
@@ -40,6 +41,8 @@ func _ready() -> void:
 	_setup_environment_and_lights()
 	_setup_camera()
 	_setup_server_and_world()
+	if _requested_map_theme != -1:
+		server.set_map_theme(_requested_map_theme)
 	_setup_ui()
 	if _preview_frenzy:
 		server.match_elapsed_sec = balance.frenzy_start_sec - 0.02
@@ -80,6 +83,10 @@ func _parse_cmdline_args() -> void:
 			_preview_tutorial_phase2 = true
 		elif arg == "--preview-tutorial-dismissed":
 			_preview_tutorial_dismissed = true
+		elif arg == "--map-theme=cyber":
+			_requested_map_theme = MatchServer.MapTheme.CYBER_FACTORY
+		elif arg == "--map-theme=hex":
+			_requested_map_theme = MatchServer.MapTheme.FLOATING_HEX
 
 func _setup_audio() -> void:
 	sound_controller = SoundController.new()
@@ -220,6 +227,9 @@ func _setup_server_and_world() -> void:
 	server.abomination_changed.connect(_on_server_abomination_changed)
 	server.frenzy_started.connect(_on_server_frenzy_started)
 	server.arena_ring_collapsed.connect(_on_server_arena_ring_collapsed)
+	server.map_theme_changed.connect(_on_server_map_theme_changed)
+	server.combatant_lives_changed.connect(_on_server_combatant_lives_changed)
+	server.combatant_eliminated.connect(_on_server_combatant_eliminated)
 	server.match_ended.connect(_on_server_match_ended)
 	server.match_restarted.connect(_on_server_match_restarted)
 
@@ -341,8 +351,11 @@ func _update_camera_follow(dt: float) -> void:
 		desired_fov = balance.camera_fov_deg - 2.4
 	camera.fov = lerpf(camera.fov, desired_fov, minf(1.0, 12.0 * dt))
 
-	var target_x: float = clampf(focus_pos.x * 0.78, -7.5, 7.5)
-	var target_z: float = clampf(focus_pos.y + balance.camera_z_bias, -8.0, 18.0)
+	var safe_b: Vector2 = server.get_safe_bounds_xz()
+	var max_cam_x: float = maxf(4.0, safe_b.x - 4.5)
+	var max_cam_z: float = maxf(6.0, safe_b.y - 4.0)
+	var target_x: float = clampf(focus_pos.x * 0.82, -max_cam_x, max_cam_x)
+	var target_z: float = clampf(focus_pos.y + balance.camera_z_bias, -max_cam_z + balance.camera_z_bias, max_cam_z + balance.camera_z_bias)
 	var desired := Vector3(target_x, 10.5, target_z)
 	var t: float = 1.0 - exp(-balance.camera_smooth_rate * dt)
 	var base_cam_pos: Vector3 = camera.position.lerp(desired, t)
@@ -439,6 +452,31 @@ func _on_server_frenzy_started() -> void:
 func _on_server_arena_ring_collapsed(_ring_index: int, collapsed_cells: Array[Vector2i], safe_bounds_xz: Vector2) -> void:
 	camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.45)
 	arena_builder.on_arena_ring_collapsed(collapsed_cells, safe_bounds_xz, server)
+
+func _on_server_map_theme_changed(theme: int) -> void:
+	arena_builder.apply_theme_materials(theme as MatchServer.MapTheme)
+	var we: WorldEnvironment = get_node_or_null("WorldEnvironment") as WorldEnvironment
+	if we != null and we.environment != null and we.environment.sky != null:
+		var sky_mat: ProceduralSkyMaterial = we.environment.sky.sky_material as ProceduralSkyMaterial
+		if sky_mat != null:
+			match theme:
+				MatchServer.MapTheme.CYBER_FACTORY:
+					sky_mat.sky_top_color = Color(0.12, 0.16, 0.24)
+					sky_mat.sky_horizon_color = Color(0.24, 0.32, 0.42)
+				MatchServer.MapTheme.FLOATING_HEX:
+					sky_mat.sky_top_color = Color(0.22, 0.48, 0.86)
+					sky_mat.sky_horizon_color = Color(0.65, 0.78, 0.95)
+				_:
+					sky_mat.sky_top_color = Color(0.38, 0.26, 0.92)
+					sky_mat.sky_horizon_color = Color(0.56, 0.42, 0.88)
+
+func _on_server_combatant_lives_changed(combatant_id: int, lives: int) -> void:
+	if combatant_id == 0 and hud != null:
+		hud.on_player_lives_updated(lives)
+
+func _on_server_combatant_eliminated(combatant_id: int, rank: int) -> void:
+	if combatant_id == 0 and hud != null:
+		hud.on_player_eliminated(rank)
 
 func _on_server_match_ended(leaderboard: Array[Dictionary], player_rank: int) -> void:
 	if hud != null:

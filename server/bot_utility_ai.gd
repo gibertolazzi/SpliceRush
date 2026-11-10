@@ -42,7 +42,9 @@ static func decide_bot_input(
 		var cur_pid: StringName = bot.slots.get(drop.slot, &"base_fist") as StringName
 		var cur_part: PartData = PartCatalog.get_part(cur_pid)
 		var rarity_gain: int = int(drop.rarity) - int(cur_part.rarity)
-		if rarity_gain <= 0:
+		if PartCatalog.is_severed(cur_pid):
+			rarity_gain = 4 # Desperately seek replacement for severed limb!
+		elif rarity_gain <= 0:
 			continue
 		var dist: float = bot.pos.distance_to(drop.pos)
 		var prox: float = 1.0 - curve_linear(dist / 14.0)

@@ -327,6 +327,14 @@ func _populate_arm_sockets(part_id: StringName) -> void:
 	_clear_socket(right_arm_socket)
 
 	match part_id:
+		&"severed_arms":
+			# Severed Arm Stumps: dark mechanical bone sockets with raw sparking ends
+			var socket_mat: ShaderMaterial = _shared_dark_mat
+			var spark_mat: StandardMaterial3D = _make_unshaded_mat(Color(1.0, 0.25, 0.20))
+			_add_box(left_arm_socket, Vector3(0.24, 0.22, 0.24), Vector3(0.0, -0.09, 0.0), socket_mat)
+			_add_box(left_arm_socket, Vector3(0.16, 0.08, 0.16), Vector3(0.0, -0.22, 0.0), spark_mat)
+			_add_box(right_arm_socket, Vector3(0.24, 0.22, 0.24), Vector3(0.0, -0.09, 0.0), socket_mat)
+			_add_box(right_arm_socket, Vector3(0.16, 0.08, 0.16), Vector3(0.0, -0.22, 0.0), spark_mat)
 		&"chainsaw_arm":
 			# Left Arm: Muscular brawler fist with dark wristband (matches key-art protagonist!)
 			_add_box(left_arm_socket, Vector3(0.36, 0.44, 0.36), Vector3(0.0, -0.18, 0.0), _skin_mat)
@@ -372,6 +380,14 @@ func _populate_leg_sockets(part_id: StringName) -> void:
 	rocket_flame = null
 
 	match part_id:
+		&"severed_legs":
+			# Severed Leg Stumps: short mechanical pegs with warning hazard accents
+			var peg_mat: ShaderMaterial = _shared_dark_mat
+			var warning_mat: StandardMaterial3D = _make_unshaded_mat(Color(1.0, 0.25, 0.20))
+			_add_box(left_leg_socket, Vector3(0.20, 0.20, 0.20), Vector3(0.0, -0.08, 0.0), peg_mat)
+			_add_box(left_leg_socket, Vector3(0.14, 0.06, 0.14), Vector3(0.0, -0.19, 0.0), warning_mat)
+			_add_box(right_leg_socket, Vector3(0.20, 0.20, 0.20), Vector3(0.0, -0.08, 0.0), peg_mat)
+			_add_box(right_leg_socket, Vector3(0.14, 0.06, 0.14), Vector3(0.0, -0.19, 0.0), warning_mat)
 		&"rocket_legs":
 			var red_mat: ShaderMaterial = _make_toon_mat(Color(0.88, 0.12, 0.16), 0.08)
 			var white_mat: ShaderMaterial = _make_toon_mat(Color(0.94, 0.94, 0.98), 0.06)
@@ -470,7 +486,9 @@ func update_visual_state(
 
 	if is_moving:
 		_walk_phase += (3.2 + speed * 1.6) * dt
-		var swing: float = sin(_walk_phase) * clampf(speed / 6.0, 0.25, 1.0) * 28.0
+		var has_severed_legs: bool = (current_slots.get(PartData.Slot.LEGS) == &"severed_legs")
+		var swing_amp: float = 14.0 if has_severed_legs else 28.0
+		var swing: float = sin(_walk_phase) * clampf(speed / 6.0, 0.25, 1.0) * swing_amp
 		left_leg_socket.rotation_degrees.x = swing
 		right_leg_socket.rotation_degrees.x = -swing
 		left_arm_socket.rotation_degrees.x = -swing * 0.85
@@ -478,7 +496,12 @@ func update_visual_state(
 			right_arm_socket.rotation_degrees.x = -65.0
 		else:
 			right_arm_socket.rotation_degrees.x = swing * 0.85
-		pivot.position.y = absf(sin(_walk_phase * 2.0)) * 0.08
+		if has_severed_legs:
+			pivot.position.y = -0.15 + absf(sin(_walk_phase)) * 0.06
+			pivot.rotation_degrees.z = sin(_walk_phase) * 8.0
+		else:
+			pivot.position.y = absf(sin(_walk_phase * 2.0)) * 0.08
+			pivot.rotation_degrees.z = 0.0
 	else:
 		# Return smoothly to idle stance
 		left_leg_socket.rotation_degrees.x = lerpf(left_leg_socket.rotation_degrees.x, 0.0, minf(1.0, 12.0 * dt))

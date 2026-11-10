@@ -9,6 +9,8 @@ var is_abomination: bool = false
 var is_frenzy: bool = false
 var show_result_overlay: bool = false
 var player_rank: int = 1
+var player_lives: int = 3
+var is_player_eliminated: bool = false
 var result_countdown_sec: float = 5.0
 var leaderboard_entries: Array[Dictionary] = []
 var total_mass: int = 100
@@ -110,9 +112,20 @@ func on_match_ended(board: Array[Dictionary], rank: int, duration_sec: float = 5
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	queue_redraw()
 
+func on_player_lives_updated(lives: int) -> void:
+	player_lives = lives
+	queue_redraw()
+
+func on_player_eliminated(rank: int) -> void:
+	is_player_eliminated = true
+	player_rank = rank
+	queue_redraw()
+
 func on_match_restarted() -> void:
 	show_result_overlay = false
 	is_frenzy = false
+	player_lives = 3
+	is_player_eliminated = false
 	_toast_timer = 0.0
 	intro_tutorial_timer = 6.0
 	_intro_elapsed = 0.0
@@ -263,13 +276,37 @@ func _draw() -> void:
 
 	# Frenzy Phase Banner or Part-Stolen Toast below timer
 	if is_frenzy and not show_result_overlay:
-		var f_rect := Rect2(Vector2(rect_size.x * 0.5 - 126.0, 62.0), Vector2(252.0, 28.0))
-		_draw_chamfer_panel(f_rect, Color(0.24, 0.04, 0.16, 0.95), magenta, 5.0)
-		draw_string(font_bold, f_rect.position + Vector2(10.0, 20.0), tr(&"HUD_FRENZY_BANNER"), HORIZONTAL_ALIGNMENT_CENTER, 232.0, 14, gold)
+		var f_rect := Rect2(Vector2(rect_size.x * 0.5 - 130.0, 62.0), Vector2(260.0, 36.0))
+		_draw_chamfer_panel(f_rect, Color(0.24, 0.04, 0.16, 0.95), magenta, 6.0)
+		draw_string(font_bold, f_rect.position + Vector2(10.0, 18.0), tr(&"HUD_FRENZY_BANNER"), HORIZONTAL_ALIGNMENT_CENTER, 240.0, 13, gold)
+
+		# 3-Lives pips: hearts/shields
+		var pips_center_x: float = f_rect.position.x + f_rect.size.x * 0.5
+		var pip_w: float = 22.0
+		var pip_gap: float = 8.0
+		var total_pips_w: float = 3.0 * pip_w + 2.0 * pip_gap
+		var start_pip_x: float = pips_center_x - total_pips_w * 0.5
+		for l_i: int in range(3):
+			var px: float = start_pip_x + float(l_i) * (pip_w + pip_gap)
+			var py: float = f_rect.position.y + 22.0
+			var is_full: bool = (l_i < player_lives)
+			var pip_r := Rect2(Vector2(px, py), Vector2(pip_w, 9.0))
+			draw_rect(pip_r, Color(0.12, 0.06, 0.18, 0.90), true)
+			if is_full:
+				draw_rect(pip_r, gold, true)
+			else:
+				draw_rect(pip_r, Color(0.5, 0.20, 0.28, 0.8), false, 1.5)
 	elif _toast_timer > 0.0 and _toast_text != "":
 		var toast_rect := Rect2(Vector2(rect_size.x - 196.0, 82.0), Vector2(184.0, 28.0))
 		_draw_chamfer_panel(toast_rect, Color(0.10, 0.06, 0.24, 0.96), gold, 5.0)
 		draw_string(font_bold, toast_rect.position + Vector2(8.0, 20.0), _toast_text, HORIZONTAL_ALIGNMENT_CENTER, 168.0, 15, gold)
+
+	# Elimination Banner
+	if is_player_eliminated and not show_result_overlay:
+		var elim_rect := Rect2(Vector2(rect_size.x * 0.5 - 160.0, 150.0), Vector2(320.0, 52.0))
+		_draw_chamfer_panel(elim_rect, Color(0.30, 0.05, 0.12, 0.96), magenta, 8.0)
+		var elim_str: String = tr(&"HUD_ELIMINATED_BANNER") % [player_rank]
+		draw_string(font_bold, elim_rect.position + Vector2(10.0, 34.0), elim_str, HORIZONTAL_ALIGNMENT_CENTER, 300.0, 20, white)
 
 	# 4. ANIMATED INTRO ONBOARDING ("RUBA I PEZZI!" & "DIVENTA L'ABOMINIO!")
 	_draw_animated_intro_tutorial(rect_size)

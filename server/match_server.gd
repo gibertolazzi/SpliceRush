@@ -13,6 +13,15 @@ signal frenzy_started()
 signal arena_ring_collapsed(ring_index: int, collapsed_cells: Array[Vector2i], safe_bounds_xz: Vector2)
 signal match_ended(leaderboard: Array[Dictionary], player_rank: int)
 signal match_restarted()
+signal map_theme_changed(theme: int)
+signal combatant_lives_changed(combatant_id: int, lives_left: int)
+signal combatant_eliminated(combatant_id: int, rank: int)
+
+enum MapTheme {
+	VIOLET_RUINS = 0,
+	CYBER_FACTORY = 1,
+	FLOATING_HEX = 2,
+}
 
 enum CellType {
 	VOID = -1,
@@ -42,6 +51,8 @@ class DroppedPartState extends RefCounted:
 class CombatantState extends RefCounted:
 	var id: int = 0
 	var is_bot: bool = true
+	var lives: int = 3
+	var eliminated: bool = false
 	var pos: Vector2 = Vector2.ZERO
 	var prev_pos: Vector2 = Vector2.ZERO
 	var vel: Vector2 = Vector2.ZERO
@@ -98,6 +109,7 @@ const PEDESTAL_WORLD_XZ := Vector2(2.2, -4.8)
 @export var balance: BalanceConfig = preload("res://shared/default_balance.tres")
 @export var bots_enabled: bool = true
 
+var current_map_theme: MapTheme = MapTheme.VIOLET_RUINS
 var match_elapsed_sec: float = 43.0 # Starts at 00:47 remaining by default for visual parity, resettable
 var match_phase: MatchPhase = MatchPhase.COMBAT
 var collapsed_rings_count: int = 0
@@ -122,7 +134,25 @@ func _ready() -> void:
 	for arg: String in OS.get_cmdline_user_args():
 		if arg == "--static-preview":
 			start_time = 43.0
+		elif arg == "--map-theme=cyber":
+			current_map_theme = MapTheme.CYBER_FACTORY
+		elif arg == "--map-theme=hex":
+			current_map_theme = MapTheme.FLOATING_HEX
+		elif arg == "--map-theme=ruins":
+			current_map_theme = MapTheme.VIOLET_RUINS
 	start_new_match(start_time, false)
+
+func set_map_theme(theme: MapTheme) -> void:
+	current_map_theme = theme
+	setup_arena_grid()
+	map_theme_changed.emit(int(current_map_theme))
+
+func _count_active_combatants() -> int:
+	var count: int = 0
+	for c: CombatantState in combatants:
+		if not c.eliminated:
+			count += 1
+	return count
 
 func start_new_match(initial_elapsed_sec: float = 0.0, emit_restart: bool = true) -> void:
 	match_elapsed_sec = initial_elapsed_sec
@@ -190,8 +220,8 @@ func get_power_part_timer() -> float:
 	return _power_part_timer
 
 func get_safe_bounds_xz() -> Vector2:
-	var eff_hw: float = maxf(4.0, float(balance.grid_width) * 0.5 - float(collapsed_rings_count) - 0.8)
-	var eff_hd: float = maxf(5.0, float(balance.grid_depth) * 0.5 - float(collapsed_rings_count) - 0.8)
+	var eff_hw: float = maxf(5.0, float(balance.grid_width) * 0.5 - float(collapsed_rings_count) * 1.5 - 0.8)
+	var eff_hd: float = maxf(6.0, float(balance.grid_depth) * 0.5 - float(collapsed_rings_count) * 1.8 - 0.8)
 	return Vector2(eff_hw * balance.tile_size, eff_hd * balance.tile_size)
 
 func setup_arena_grid() -> void:
@@ -199,53 +229,89 @@ func setup_arena_grid() -> void:
 	block_hp.clear()
 	var hw: int = balance.grid_width / 2
 	var hd: int = balance.grid_depth / 2
-	for gx: int in range(-hw, hw):
-		for gz: int in range(-hd, hd):
-			var cell := Vector2i(gx, gz)
-			grid_cells[cell] = CellType.FLOOR
+
+	match current_map_theme:
+		MapTheme.FLOATING_HEX:
+			for gx: int in range(-hw, hw):
+				for gz: int in range(-hd, hd):
+					var in_center: bool = (absf(float(gx)) + absf(float(gz)) * 0.75) <= 7.0
+					var in_north: bool = Vector2(float(gx), float(gz) + 12.0).length() <= 5.5
+					var in_south: bool = Vector2(float(gx), float(gz) - 12.0).length() <= 5.5
+					var in_west: bool = Vector2(float(gx) + 10.0, float(gz)).length() <= 5.0
+					var in_east: bool = Vector2(float(gx) - 10.0, float(gz)).length() <= 5.0
+					var in_vert_bridge: bool = (abs(gx) <= 1 and abs(gz) <= 15)
+					var in_horiz_bridge: bool = (abs(gz) <= 1 and abs(gx) <= 12)
+					if in_center or in_north or in_south or in_west or in_east or in_vert_bridge or in_horiz_bridge:
+						grid_cells[Vector2i(gx, gz)] = CellType.FLOOR
+
+		MapTheme.CYBER_FACTORY:
+			for gx: int in range(-hw, hw):
+				for gz: int in range(-hd, hd):
+					grid_cells[Vector2i(gx, gz)] = CellType.FLOOR
+
+			var cyber_hazards: Array[Vector2i] = [
+				Vector2i(-6, -10), Vector2i(-5, -10), Vector2i(5, -10), Vector2i(6, -10),
+				Vector2i(-10, 0), Vector2i(-9, 0), Vector2i(9, 0), Vector2i(10, 0),
+				Vector2i(-6, 10), Vector2i(-5, 10), Vector2i(5, 10), Vector2i(6, 10),
+			]
+			for ch: Vector2i in cyber_hazards:
+				grid_cells[ch] = CellType.HAZARD_BARRIER
+
+			var cyber_blocks: Array[Vector2i] = [
+				Vector2i(-8, -6), Vector2i(-7, -6), Vector2i(7, -6), Vector2i(8, -6),
+				Vector2i(-8, 6), Vector2i(-7, 6), Vector2i(7, 6), Vector2i(8, 6),
+				Vector2i(-3, -12), Vector2i(3, -12), Vector2i(-3, 12), Vector2i(3, 12),
+			]
+			for cb: Vector2i in cyber_blocks:
+				grid_cells[cb] = CellType.DESTRUCTIBLE_BLOCK
+				block_hp[cb] = balance.destructible_block_hp
+
+		MapTheme.VIOLET_RUINS, _:
+			for gx: int in range(-hw, hw):
+				for gz: int in range(-hd, hd):
+					grid_cells[Vector2i(gx, gz)] = CellType.FLOOR
+
+			var hazard_coords: Array[Vector2i] = [
+				Vector2i(-8, -9), Vector2i(-7, -9), Vector2i(7, -9), Vector2i(8, -9),
+				Vector2i(-11, 0), Vector2i(-10, 0), Vector2i(10, 0), Vector2i(11, 0),
+				Vector2i(-8, 9), Vector2i(-7, 9), Vector2i(7, 9), Vector2i(8, 9),
+			]
+			for hc: Vector2i in hazard_coords:
+				grid_cells[hc] = CellType.HAZARD_BARRIER
+
+			var destructible_coords: Array[Vector2i] = [
+				Vector2i(-9, -5), Vector2i(-8, -5), Vector2i(8, -5), Vector2i(9, -5),
+				Vector2i(-9, 5), Vector2i(-8, 5), Vector2i(8, 5), Vector2i(9, 5),
+				Vector2i(-5, -11), Vector2i(0, -11), Vector2i(5, -11),
+				Vector2i(-5, 11), Vector2i(0, 11), Vector2i(5, 11),
+				Vector2i(-11, -7), Vector2i(11, -7), Vector2i(-11, 7), Vector2i(11, 7),
+			]
+			for dc: Vector2i in destructible_coords:
+				grid_cells[dc] = CellType.DESTRUCTIBLE_BLOCK
+				block_hp[dc] = balance.destructible_block_hp
 
 	var ped_cells: Array[Vector2i] = [
-		Vector2i(1, -4), Vector2i(2, -4),
-		Vector2i(1, -3), Vector2i(2, -3),
+		Vector2i(-1, -1), Vector2i(0, -1),
+		Vector2i(-1, 0), Vector2i(0, 0),
 	]
 	for pc: Vector2i in ped_cells:
 		grid_cells[pc] = CellType.POWER_PEDESTAL
 
-	var hazard_coords: Array[Vector2i] = [
-		Vector2i(-2, -5), Vector2i(-1, -5),
-		Vector2i(5, -2), Vector2i(5, -1),
-		Vector2i(-6, 1), Vector2i(6, 2),
-	]
-	for hc: Vector2i in hazard_coords:
-		grid_cells[hc] = CellType.HAZARD_BARRIER
-
-	var destructible_coords: Array[Vector2i] = [
-		Vector2i(-5, -2), Vector2i(-4, -2),
-		Vector2i(4, -5), Vector2i(5, -5),
-		Vector2i(-5, 3), Vector2i(-4, 3),
-		Vector2i(4, 3), Vector2i(5, 3),
-		Vector2i(-3, -7), Vector2i(0, -7), Vector2i(3, -7),
-		Vector2i(-6, -4), Vector2i(6, -4),
-	]
-	for dc: Vector2i in destructible_coords:
-		grid_cells[dc] = CellType.DESTRUCTIBLE_BLOCK
-		block_hp[dc] = balance.destructible_block_hp
-
 func spawn_all_combatants() -> void:
 	combatants.clear()
 	var initial_positions: Array[Vector2] = [
-		Vector2(0.0, 7.5),    # 0: Protagonist (foreground center - generous breathing room)
-		Vector2(-6.5, 4.5),   # 1: Red fighter (left mid-foreground)
-		Vector2(6.5, 4.5),    # 2: Blue fighter with visor (right mid-foreground)
-		Vector2(-7.5, 0.0),   # 3: Green fighter with mohawk (mid left)
-		Vector2(7.5, 0.0),    # 4: Yellow-orange fighter (mid right)
-		Vector2(-4.5, -4.0),  # 5: Deep Blue fighter (left near pedestal)
-		Vector2(4.5, -4.0),   # 6: Hot Pink fighter (right near pedestal)
-		Vector2(0.0, -6.5),   # 7: Cyan fighter (north center)
-		Vector2(-6.5, -9.5),  # 8: Coral fighter (north-west corner)
-		Vector2(6.5, -9.5),   # 9: Lime fighter (north-east corner)
-		Vector2(-2.5, -11.0), # 10: Lavender fighter (far north ruins left)
-		Vector2(2.5, -11.0),  # 11: Gold fighter (far north ruins right)
+		Vector2(0.0, 14.0),   # 0: Protagonist (foreground center - generous breathing room)
+		Vector2(-9.0, 9.0),   # 1: Red fighter (south-west)
+		Vector2(9.0, 9.0),    # 2: Blue fighter with visor (south-east)
+		Vector2(-14.0, 0.0),  # 3: Green fighter with mohawk (mid left)
+		Vector2(14.0, 0.0),   # 4: Yellow-orange fighter (mid right)
+		Vector2(-8.0, -8.0),  # 5: Deep Blue fighter (north-west inner)
+		Vector2(8.0, -8.0),   # 6: Hot Pink fighter (north-east inner)
+		Vector2(0.0, -14.0),  # 7: Cyan fighter (north center)
+		Vector2(-12.0, -18.0),# 8: Coral fighter (north-west corner)
+		Vector2(12.0, -18.0), # 9: Lime fighter (north-east corner)
+		Vector2(-5.0, -22.0), # 10: Lavender fighter (far north left)
+		Vector2(5.0, -22.0),  # 11: Gold fighter (far north right)
 	]
 	var bot_loadouts: Array[Dictionary] = [
 		{},
@@ -265,6 +331,8 @@ func spawn_all_combatants() -> void:
 		var c := CombatantState.new()
 		c.id = i
 		c.is_bot = (i != 0)
+		c.lives = 3
+		c.eliminated = false
 		c.pos = initial_positions[i % initial_positions.size()]
 		c.prev_pos = c.pos
 		c.hp = balance.max_hp
@@ -302,9 +370,11 @@ func spawn_all_combatants() -> void:
 func _spawn_initial_arena_drops() -> void:
 	dropped_parts.clear()
 	_power_part_timer = balance.power_part_interval_sec
-	spawn_dropped_part(&"mega_claws", Vector2(-1.4, 0.9), Vector2.ZERO, false)
-	spawn_dropped_part(&"roller_wheels", Vector2(1.7, 0.6), Vector2.ZERO, false)
-	spawn_dropped_part(&"magnet_core", Vector2(0.2, -2.2), Vector2.ZERO, false)
+	spawn_dropped_part(&"mega_claws", Vector2(-4.5, 3.5), Vector2.ZERO, false)
+	spawn_dropped_part(&"roller_wheels", Vector2(4.5, -3.5), Vector2.ZERO, false)
+	spawn_dropped_part(&"magnet_core", Vector2(2.0, -6.5), Vector2.ZERO, false)
+	spawn_dropped_part(&"chainsaw_arm", Vector2(-5.5, -4.5), Vector2.ZERO, false)
+	spawn_dropped_part(&"rocket_legs", Vector2(6.0, 5.5), Vector2.ZERO, false)
 
 func spawn_dropped_part(part_id: StringName, pos_xz: Vector2, pop_vel: Vector2 = Vector2.ZERO, is_power: bool = false) -> DroppedPartState:
 	var pdata: PartData = PartCatalog.get_part(part_id)
@@ -337,8 +407,9 @@ func _recalc_combatant_stats(c: CombatantState, emit_signals: bool = true) -> vo
 		rng *= p.range_multiplier
 		if pid == &"magnet_core":
 			pick *= balance.magnet_pickup_multiplier
-	c.speed_mult = clampf(spd, 0.75, 1.65)
-	c.damage_mult = clampf(dmg, 0.75, 2.20)
+	# Severed limbs can reduce speed down to 0.40 and damage to 0.30
+	c.speed_mult = clampf(spd, 0.40, 1.80)
+	c.damage_mult = clampf(dmg, 0.30, 2.50)
 	c.cooldown_mult = clampf(cd, 0.55, 1.35)
 	c.range_mult = clampf(rng, 0.85, 1.60)
 	c.pickup_mult = pick
@@ -431,6 +502,8 @@ func step_simulation(dt: float) -> void:
 	for c: CombatantState in combatants:
 		c.prev_pos = c.pos
 		if not c.alive:
+			if c.eliminated:
+				continue
 			c.respawn_timer -= dt
 			if c.respawn_timer <= 0.0:
 				c.alive = true
@@ -438,6 +511,11 @@ func step_simulation(dt: float) -> void:
 				c.pos = _pick_spawn_pos(c.id)
 				c.prev_pos = c.pos
 				c.vel = Vector2.ZERO
+				# If both limbs were severed, restore base limbs on fresh respawn
+				if c.slots.get(PartData.Slot.ARMS) == &"severed_arms" and c.slots.get(PartData.Slot.LEGS) == &"severed_legs":
+					c.slots[PartData.Slot.ARMS] = PartCatalog.get_base_part_for_slot(PartData.Slot.ARMS)
+					c.slots[PartData.Slot.LEGS] = PartCatalog.get_base_part_for_slot(PartData.Slot.LEGS)
+					_recalc_combatant_stats(c, true)
 				combatant_respawned.emit(c.id, c.pos)
 			continue
 
@@ -534,10 +612,16 @@ func build_leaderboard() -> Array[Dictionary]:
 			"total_mass": c.total_mass,
 			"stolen_parts_count": c.stolen_parts_count,
 			"kills": c.kills,
+			"lives": c.lives,
+			"eliminated": c.eliminated,
 			"is_abomination": c.is_abomination,
 			"slots": c.slots.duplicate(),
 		})
 	entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var a_elim: bool = bool(a.get("eliminated", false))
+		var b_elim: bool = bool(b.get("eliminated", false))
+		if a_elim != b_elim:
+			return not a_elim # Surviving combatants rank higher
 		if int(a["total_mass"]) != int(b["total_mass"]):
 			return int(a["total_mass"]) > int(b["total_mass"])
 		return int(a["stolen_parts_count"]) > int(b["stolen_parts_count"])
@@ -571,7 +655,7 @@ func _find_collector_for_drop(drop: DroppedPartState) -> CombatantState:
 	var best: CombatantState = null
 	var best_dist_sq: float = 999999.0
 	for c: CombatantState in combatants:
-		if not c.alive:
+		if not c.alive or c.eliminated:
 			continue
 		var radius: float = balance.part_pickup_radius * c.pickup_mult
 		var d_sq: float = c.pos.distance_squared_to(drop.pos)
@@ -580,7 +664,10 @@ func _find_collector_for_drop(drop: DroppedPartState) -> CombatantState:
 		var current_pid: StringName = c.slots.get(drop.slot, &"base_fist") as StringName
 		var current_part: PartData = PartCatalog.get_part(current_pid)
 		var should_equip: bool = false
-		if int(drop.rarity) > int(current_part.rarity):
+		if PartCatalog.is_severed(current_pid):
+			# Always prioritize equipping when limb is severed!
+			should_equip = true
+		elif int(drop.rarity) > int(current_part.rarity):
 			should_equip = true
 		elif int(drop.rarity) == int(current_part.rarity) and drop.part_id != current_pid:
 			should_equip = true
@@ -598,13 +685,36 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 		_recalc_combatant_stats(killer, true)
 		_record_event(&"kill", killer.id, victim.id, victim.pos)
 
+	if is_frenzy_active():
+		victim.lives -= 1
+		combatant_lives_changed.emit(victim.id, victim.lives)
+		if victim.lives <= 0:
+			victim.eliminated = true
+			var active_left: int = _count_active_combatants()
+			var rank: int = active_left + 1
+			combatant_eliminated.emit(victim.id, rank)
+			_record_event(&"eliminated", killer.id if killer != null else -1, victim.id, victim.pos)
+			if active_left <= 1:
+				match_elapsed_sec = balance.match_duration_sec
+				match_phase = MatchPhase.RESULT
+				result_timer_sec = balance.result_screen_duration_sec
+				var board: Array[Dictionary] = build_leaderboard()
+				var p_rank: int = 1
+				for idx: int in range(board.size()):
+					if int(board[idx]["id"]) == 0:
+						p_rank = idx + 1
+						break
+				match_ended.emit(board, p_rank)
+				state_ticked.emit(0.0)
+				return
+
 	var max_drops: int = balance.abomination_drop_count if victim.is_abomination else 2
 	var non_base_slots: Array[PartData.Slot] = []
 	for s_key: Variant in victim.slots.keys():
 		var slot_enum: PartData.Slot = s_key as PartData.Slot
 		var pid: StringName = victim.slots[slot_enum] as StringName
 		var base_pid: StringName = PartCatalog.get_base_part_for_slot(slot_enum)
-		if pid != base_pid:
+		if pid != base_pid and not PartCatalog.is_severed(pid):
 			non_base_slots.append(slot_enum)
 
 	non_base_slots.sort_custom(func(a: PartData.Slot, b: PartData.Slot) -> bool:
@@ -618,13 +728,23 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 		if dropped_count >= max_drops:
 			break
 		var drop_pid: StringName = victim.slots[slot_to_drop] as StringName
-		victim.slots[slot_to_drop] = PartCatalog.get_base_part_for_slot(slot_to_drop)
+		var severed_pid: StringName = PartCatalog.get_severed_part_for_slot(slot_to_drop)
+		if severed_pid != &"":
+			victim.slots[slot_to_drop] = severed_pid
+		else:
+			victim.slots[slot_to_drop] = PartCatalog.get_base_part_for_slot(slot_to_drop)
+
 		var angle: float = _rng.randf_range(0.0, TAU) + float(dropped_count) * 2.1
 		var pop_vel := Vector2(cos(angle), sin(angle)) * balance.part_drop_pop_speed
 		spawn_dropped_part(drop_pid, victim.pos + Vector2(cos(angle), sin(angle)) * 0.45, pop_vel, false)
 		dropped_count += 1
 
 	if dropped_count == 0:
+		# If victim only had base parts, sever an arm or leg and drop a bonus part
+		if victim.slots.get(PartData.Slot.ARMS) != &"severed_arms":
+			victim.slots[PartData.Slot.ARMS] = &"severed_arms"
+		elif victim.slots.get(PartData.Slot.LEGS) != &"severed_legs":
+			victim.slots[PartData.Slot.LEGS] = &"severed_legs"
 		var bonus_part: PartData = PartCatalog.pick_random_part(_rng, PartData.Rarity.RARE, PartData.Rarity.EPIC)
 		var angle: float = _rng.randf_range(0.0, TAU)
 		var pop_vel := Vector2(cos(angle), sin(angle)) * balance.part_drop_pop_speed
@@ -737,7 +857,7 @@ func damage_block(cell: Vector2i, amount: int) -> bool:
 
 func _clamp_to_arena(candidate: Vector2) -> Vector2:
 	var safe_b: Vector2 = get_safe_bounds_xz()
-	return Vector2(clampf(candidate.x, -safe_b.x, safe_b.x), clampf(candidate.y, -safe_b.y, minf(safe_b.y, 4.8)))
+	return Vector2(clampf(candidate.x, -safe_b.x, safe_b.x), clampf(candidate.y, -safe_b.y, safe_b.y))
 
 func _resolve_grid_and_bounds(c: CombatantState, candidate: Vector2) -> Vector2:
 	var out: Vector2 = _clamp_to_arena(candidate)
@@ -776,8 +896,10 @@ func _resolve_combatant_separation() -> void:
 				b.pos += push
 
 func _pick_spawn_pos(combatant_id: int) -> Vector2:
+	var safe_b: Vector2 = get_safe_bounds_xz()
 	var angle: float = float(combatant_id) * TAU / float(maxi(balance.max_combatants, 1))
-	return _clamp_to_arena(Vector2(cos(angle) * 4.5, sin(angle) * 4.5))
+	var radius: float = minf(safe_b.x, safe_b.y) * 0.70
+	return _clamp_to_arena(Vector2(cos(angle) * radius, sin(angle) * radius))
 
 func cell_to_world_xz(cell: Vector2i) -> Vector2:
 	return Vector2((float(cell.x) + 0.5) * balance.tile_size, (float(cell.y) + 0.5) * balance.tile_size)

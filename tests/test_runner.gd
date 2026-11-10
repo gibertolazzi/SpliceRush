@@ -19,6 +19,9 @@ func _initialize() -> void:
 		"test_3s_viral_clip_and_game_feel",
 		"test_logo_and_londrina_font_resources",
 		"test_manual_attack_and_bot_rebalance_and_animated_intro",
+		"test_brawl_royale_lives_and_elimination",
+		"test_severed_limb_debuffs",
+		"test_multiple_map_themes",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -70,13 +73,13 @@ func test_authoritative_movement_and_anticheat() -> bool:
 	srv.bots_enabled = false
 	root.add_child(srv)
 	var p: MatchServer.CombatantState = srv.combatants[0]
-	p.pos = Vector2(0.0, 0.0)
+	p.pos = Vector2(3.0, 3.0)
 	p.vel = Vector2.ZERO
 	srv.submit_client_input(0, Vector2(10.0, 0.0), false)
 	assert_true(is_equal_approx(p.move_input.length(), 1.0), "server_clamps_client_input_length")
 	for _i: int in range(10):
 		srv.step_simulation(1.0 / 30.0)
-	assert_true(p.pos.x > 0.5, "player_moved_right_on_xz_plane")
+	assert_true(p.pos.x > 3.5, "player_moved_right_on_xz_plane")
 	srv.free()
 	return true
 
@@ -108,7 +111,7 @@ func test_destructible_grid_blocks() -> bool:
 	var srv := MatchServer.new()
 	srv.bots_enabled = false
 	root.add_child(srv)
-	var target_cell := Vector2i(-5, -2)
+	var target_cell := Vector2i(-9, -5)
 	assert_eq(int(srv.grid_cells[target_cell]), MatchServer.CellType.DESTRUCTIBLE_BLOCK, "block_initially_destructible")
 	var destroyed: bool = srv.damage_block(target_cell, 999)
 	assert_eq(destroyed, true, "block_destroyed_on_lethal_damage")
@@ -165,7 +168,7 @@ func test_part_drop_on_kill_and_pickup_transforms_body() -> bool:
 
 	srv.step_simulation(1.0 / 30.0)
 	assert_eq(bot.alive, false, "bot_killed_by_auto_attack")
-	assert_eq(bot.slots[PartData.Slot.ARMS], &"base_fist", "dead_bot_lost_chainsaw_arm")
+	assert_eq(bot.slots[PartData.Slot.ARMS], &"severed_arms", "dead_bot_lost_chainsaw_arm")
 	assert_eq(srv.dropped_parts.size(), 1, "one_part_dropped_on_kill")
 	var drop: MatchServer.DroppedPartState = srv.dropped_parts[0]
 	assert_eq(drop.part_id, &"chainsaw_arm", "dropped_part_is_chainsaw_arm")
@@ -373,9 +376,9 @@ func test_manual_attack_and_bot_rebalance_and_animated_intro() -> bool:
 	# 3. Test manual attack click / button
 	var p: MatchServer.CombatantState = srv.combatants[0]
 	var target_bot: MatchServer.CombatantState = srv.combatants[1]
-	p.pos = Vector2(0.0, 0.0)
+	p.pos = Vector2(2.0, 2.0)
 	p.attack_cooldown = 0.0
-	target_bot.pos = Vector2(1.2, 0.0)
+	target_bot.pos = Vector2(3.2, 2.0)
 	target_bot.hp = 100
 	target_bot.attack_cooldown = 0.0
 
@@ -409,5 +412,107 @@ func test_manual_attack_and_bot_rebalance_and_animated_intro() -> bool:
 	assert_eq(hud.intro_tutorial_timer, 6.0, "hud_resets_intro_on_rematch")
 
 	hud.free()
+	srv.free()
+	return true
+
+func test_brawl_royale_lives_and_elimination() -> bool:
+	var srv := MatchServer.new()
+	srv.bots_enabled = false
+	root.add_child(srv)
+
+	# Verify 3 initial lives for all combatants
+	for c: MatchServer.CombatantState in srv.combatants:
+		assert_eq(c.lives, 3, "combatant_starts_with_3_lives")
+		assert_eq(c.eliminated, false, "combatant_not_eliminated_at_start")
+
+	# Advance to Frenzy phase
+	srv.start_new_match(61.0, false)
+	assert_true(srv.is_frenzy_active(), "frenzy_active_at_61s")
+
+	var victim: MatchServer.CombatantState = srv.combatants[1]
+	var killer: MatchServer.CombatantState = srv.combatants[0]
+
+	# Lethal blow 1 in Frenzy
+	victim.hp = 1
+	srv._handle_combatant_death(victim, killer)
+	assert_eq(victim.lives, 2, "victim_loses_1_life_on_death_in_frenzy")
+	assert_eq(victim.eliminated, false, "victim_not_eliminated_with_2_lives")
+
+	# Lethal blow 2
+	victim.hp = 1
+	srv._handle_combatant_death(victim, killer)
+	assert_eq(victim.lives, 1, "victim_loses_second_life")
+	assert_eq(victim.eliminated, false, "victim_not_eliminated_with_1_life")
+
+	# Lethal blow 3 -> Permanent elimination
+	victim.hp = 1
+	srv._handle_combatant_death(victim, killer)
+	assert_eq(victim.lives, 0, "victim_lives_reduced_to_zero")
+	assert_eq(victim.eliminated, true, "victim_permanently_eliminated")
+
+	# Elimination rankings in leaderboard
+	var board: Array[Dictionary] = srv.build_leaderboard()
+	var victim_found: bool = false
+	for entry: Dictionary in board:
+		if int(entry["id"]) == 1:
+			assert_eq(entry["eliminated"], true, "leaderboard_reflects_elimination")
+			victim_found = true
+	assert_true(victim_found, "eliminated_victim_in_leaderboard")
+
+	srv.free()
+	return true
+
+func test_severed_limb_debuffs() -> bool:
+	var srv := MatchServer.new()
+	srv.bots_enabled = false
+	root.add_child(srv)
+	var c: MatchServer.CombatantState = srv.combatants[0]
+
+	# Base combatant multipliers are 1.0
+	srv._recalc_combatant_stats(c, false)
+	assert_true(is_equal_approx(c.speed_mult, 1.0), "base_speed_mult_is_1")
+	assert_true(is_equal_approx(c.damage_mult, 1.0), "base_damage_mult_is_1")
+
+	# Sever arms -> 0.35 damage multiplier
+	c.slots[PartData.Slot.ARMS] = &"severed_arms"
+	srv._recalc_combatant_stats(c, false)
+	assert_true(c.damage_mult <= 0.40, "severed_arms_applies_severe_damage_debuff")
+
+	# Sever legs -> 0.50 speed multiplier
+	c.slots[PartData.Slot.LEGS] = &"severed_legs"
+	srv._recalc_combatant_stats(c, false)
+	assert_true(c.speed_mult <= 0.55, "severed_legs_applies_severe_speed_debuff")
+
+	# Restoring arms and legs removes debuffs
+	c.slots[PartData.Slot.ARMS] = &"base_fist"
+	c.slots[PartData.Slot.LEGS] = &"base_boots"
+	srv._recalc_combatant_stats(c, false)
+	assert_true(c.damage_mult >= 0.95, "restoring_arms_restores_damage")
+	assert_true(c.speed_mult >= 0.95, "restoring_legs_restores_speed")
+
+	srv.free()
+	return true
+
+func test_multiple_map_themes() -> bool:
+	var srv := MatchServer.new()
+	srv.bots_enabled = false
+	root.add_child(srv)
+
+	# Theme 1: Violet Ruins
+	srv.set_map_theme(MatchServer.MapTheme.VIOLET_RUINS)
+	assert_eq(srv.current_map_theme, MatchServer.MapTheme.VIOLET_RUINS, "violet_ruins_theme_set")
+	assert_true(srv.grid_cells.size() >= 1000, "violet_ruins_has_32x40_grid")
+
+	# Theme 2: Cyber Factory
+	srv.set_map_theme(MatchServer.MapTheme.CYBER_FACTORY)
+	assert_eq(srv.current_map_theme, MatchServer.MapTheme.CYBER_FACTORY, "cyber_factory_theme_set")
+	assert_true(srv.grid_cells.has(Vector2i(-6, -10)), "cyber_factory_has_cyber_hazards")
+
+	# Theme 3: Floating Hex
+	srv.set_map_theme(MatchServer.MapTheme.FLOATING_HEX)
+	assert_eq(srv.current_map_theme, MatchServer.MapTheme.FLOATING_HEX, "floating_hex_theme_set")
+	# In Floating Hex, void cells are not present in grid_cells
+	assert_true(srv.grid_cells.size() < 1280, "floating_hex_has_void_islands")
+
 	srv.free()
 	return true

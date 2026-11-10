@@ -13,8 +13,8 @@ extends Resource
 @export var clip_log_window_sec: float = 15.0
 
 @export_group("Arena Grid")
-@export var grid_width: int = 16
-@export var grid_depth: int = 22
+@export var grid_width: int = 32
+@export var grid_depth: int = 40
 @export var tile_size: float = 1.5
 @export var destructible_block_hp: int = 45
 @export var hazard_damage_per_sec: float = 15.0

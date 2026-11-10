@@ -95,6 +95,18 @@ static func _ensure_initialized() -> void:
 		Color(1.0, 0.78, 0.15), Color(1.0, 0.18, 0.58)
 	)
 
+	# SEVERED / MISSING SLOTS
+	_register(
+		&"severed_arms", &"PART_SEVERED_ARMS", PartData.Slot.ARMS, PartData.Rarity.COMMON,
+		&"severed_stub", 0.35, 1.40, 0.65, 0.85, 0,
+		Color(0.20, 0.18, 0.28), Color(0.35, 0.10, 0.15)
+	)
+	_register(
+		&"severed_legs", &"PART_SEVERED_LEGS", PartData.Slot.LEGS, PartData.Rarity.COMMON,
+		&"severed_crawl", 0.80, 1.10, 0.90, 0.50, 0,
+		Color(0.20, 0.18, 0.28), Color(0.35, 0.10, 0.15)
+	)
+
 static func _register(
 	id: StringName,
 	tr_key: StringName,
@@ -142,6 +154,21 @@ static func get_base_part_for_slot(slot: PartData.Slot) -> StringName:
 		PartData.Slot.CORE:
 			return &"base_core"
 	return &"base_fist"
+
+static func get_severed_part_for_slot(slot: PartData.Slot) -> StringName:
+	match slot:
+		PartData.Slot.ARMS:
+			return &"severed_arms"
+		PartData.Slot.LEGS:
+			return &"severed_legs"
+		PartData.Slot.HEAD:
+			return &"base_head"
+		PartData.Slot.CORE:
+			return &"base_core"
+	return &"base_fist"
+
+static func is_severed(part_id: StringName) -> bool:
+	return part_id == &"severed_arms" or part_id == &"severed_legs"
 
 static func get_rarity_color(rarity: PartData.Rarity) -> Color:
 	match rarity:

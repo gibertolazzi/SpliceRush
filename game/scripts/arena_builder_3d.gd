@@ -50,9 +50,27 @@ func _init_materials() -> void:
 		rmat.albedo_color = PartCatalog.get_rarity_color(r as PartData.Rarity)
 		_rarity_mats[r] = rmat
 
+func apply_theme_materials(theme: MatchServer.MapTheme) -> void:
+	if _stone_mat_a == null:
+		_init_materials()
+	match theme:
+		MatchServer.MapTheme.CYBER_FACTORY:
+			_stone_mat_a.albedo_color = Color(0.20, 0.22, 0.26)
+			_stone_mat_b.albedo_color = Color(0.28, 0.30, 0.35)
+			_stone_dark_mat.albedo_color = Color(0.10, 0.12, 0.15)
+		MatchServer.MapTheme.FLOATING_HEX:
+			_stone_mat_a.albedo_color = Color(0.55, 0.62, 0.75)
+			_stone_mat_b.albedo_color = Color(0.38, 0.45, 0.60)
+			_stone_dark_mat.albedo_color = Color(0.15, 0.20, 0.32)
+		_:
+			_stone_mat_a.albedo_color = Color(0.44, 0.36, 0.62)
+			_stone_mat_b.albedo_color = Color(0.35, 0.28, 0.54)
+			_stone_dark_mat.albedo_color = Color(0.20, 0.15, 0.34)
+
 func build_from_server(server: MatchServer) -> void:
 	if _stone_mat_a == null:
 		_init_materials()
+	apply_theme_materials(server.current_map_theme)
 	for child: Node in get_children():
 		child.queue_free()
 	destructible_nodes.clear()
@@ -64,12 +82,15 @@ func build_from_server(server: MatchServer) -> void:
 	var tile: float = server.balance.tile_size
 	_build_floor_multimesh(server, tile)
 	_build_grid_props(server, tile)
-	_build_power_pedestal(Vector3(2.2, 0.0, -4.8))
-	_build_background_ruins_and_cliffs()
+
 	var is_static_preview: bool = false
 	for arg: String in OS.get_cmdline_user_args():
 		if arg == "--static-preview":
 			is_static_preview = true
+
+	var ped_pos: Vector3 = Vector3(2.2, 0.0, -4.8) if is_static_preview else Vector3(MatchServer.PEDESTAL_WORLD_XZ.x, 0.0, MatchServer.PEDESTAL_WORLD_XZ.y)
+	_build_power_pedestal(ped_pos)
+	_build_background_ruins_and_cliffs(server, is_static_preview)
 	if is_static_preview:
 		_build_dust_and_action_accents()
 	_init_debris_pool()
@@ -84,7 +105,6 @@ func on_arena_ring_collapsed(collapsed_cells: Array[Vector2i], safe_bounds_xz: V
 			var info: Dictionary = floor_cell_map[cell]
 			var mm: MultiMesh = info["mm"] as MultiMesh
 			var idx: int = int(info["idx"])
-			# Collapse slab into the void below
 			mm.set_instance_transform(idx, Transform3D(Basis.from_scale(Vector3(0.001, 0.001, 0.001)), Vector3(0.0, -50.0, 0.0)))
 			floor_cell_map.erase(cell)
 		if step_debris % 5 == 0 and server != null:
@@ -96,7 +116,6 @@ func on_arena_ring_collapsed(collapsed_cells: Array[Vector2i], safe_bounds_xz: V
 		if bm != null:
 			bm.size = Vector3(safe_bounds_xz.x * 2.0 + 1.8, 1.4, safe_bounds_xz.y * 2.0 + 1.8)
 
-	# Build/update visible Frenzy Warning Perimeter Rails & crumbling edge blocks inside the camera view
 	if frenzy_perimeter_root != null and is_instance_valid(frenzy_perimeter_root):
 		frenzy_perimeter_root.queue_free()
 	frenzy_perimeter_root = Node3D.new()
@@ -107,12 +126,12 @@ func on_arena_ring_collapsed(collapsed_cells: Array[Vector2i], safe_bounds_xz: V
 	danger_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	danger_mat.albedo_color = Color(1.0, 0.20, 0.45)
 
-	var edge_x: float = minf(safe_bounds_xz.x, 5.4)
-	_spawn_box(frenzy_perimeter_root, Vector3(0.22, 0.18, 14.0), Vector3(-edge_x, 0.12, -2.0), danger_mat)
-	_spawn_box(frenzy_perimeter_root, Vector3(0.22, 0.18, 14.0), Vector3(edge_x, 0.12, -2.0), danger_mat)
-	# Tilted falling stone slabs on left and right edges to show the arena actively crumbling
-	_spawn_box(frenzy_perimeter_root, Vector3(1.2, 0.28, 1.2), Vector3(-edge_x - 0.6, -0.35, 1.2), _stone_mat_b, Vector3(18.0, 12.0, 38.0))
-	_spawn_box(frenzy_perimeter_root, Vector3(1.2, 0.28, 1.2), Vector3(edge_x + 0.6, -0.35, 0.8), _stone_mat_a, Vector3(-16.0, -10.0, -40.0))
+	var edge_x: float = safe_bounds_xz.x
+	var edge_z: float = safe_bounds_xz.y
+	_spawn_box(frenzy_perimeter_root, Vector3(0.28, 0.24, edge_z * 2.0), Vector3(-edge_x, 0.12, 0.0), danger_mat)
+	_spawn_box(frenzy_perimeter_root, Vector3(0.28, 0.24, edge_z * 2.0), Vector3(edge_x, 0.12, 0.0), danger_mat)
+	_spawn_box(frenzy_perimeter_root, Vector3(edge_x * 2.0, 0.24, 0.28), Vector3(0.0, 0.12, -edge_z), danger_mat)
+	_spawn_box(frenzy_perimeter_root, Vector3(edge_x * 2.0, 0.24, 0.28), Vector3(0.0, 0.12, edge_z), danger_mat)
 
 func spawn_dropped_part_visual(drop_id: int, part_id: StringName, slot: int, rarity: int, pos_xz: Vector2, _is_power: bool) -> void:
 	if _stone_mat_a == null:
@@ -339,40 +358,52 @@ func _build_question_mark(parent: Node3D, offset: Vector3, scale_f: float, mat: 
 	_spawn_box(q, Vector3(0.16, 0.20, 0.08), Vector3(0.0, -0.08, 0.0), mat)
 	_spawn_box(q, Vector3(0.18, 0.18, 0.08), Vector3(0.0, -0.36, 0.0), mat)
 
-func _build_background_ruins_and_cliffs() -> void:
+func _build_background_ruins_and_cliffs(server: MatchServer, is_static_preview: bool) -> void:
 	var ruins := Node3D.new()
 	ruins.name = "BackgroundRuins"
 	add_child(ruins)
 
 	var ruin_mat := StandardMaterial3D.new()
-	ruin_mat.albedo_color = Color(0.42, 0.32, 0.64)
+	ruin_mat.albedo_color = _stone_mat_a.albedo_color
 	ruin_mat.roughness = 0.85
 
-	_spawn_box(ruins, Vector3(11.0, 2.4, 2.0), Vector3(0.5, 0.8, -14.5), ruin_mat)
-	_spawn_box(ruins, Vector3(2.8, 3.8, 2.2), Vector3(-5.2, 1.5, -14.2), ruin_mat)
-	_spawn_box(ruins, Vector3(3.0, 3.6, 2.2), Vector3(5.6, 1.4, -14.0), ruin_mat)
-	_spawn_box(ruins, Vector3(2.4, 1.6, 2.2), Vector3(-8.2, 5.2, -16.0), ruin_mat, Vector3(6.0, 18.0, -8.0))
-	_spawn_box(ruins, Vector3(2.0, 1.4, 2.0), Vector3(8.4, 5.6, -15.5), ruin_mat, Vector3(-5.0, -15.0, 10.0))
-	_spawn_box(ruins, Vector3(0.95, 0.95, 0.95), Vector3(6.8, 4.2, -7.5), _stone_dark_mat, Vector3(22.0, 35.0, -18.0))
+	if is_static_preview:
+		_spawn_box(ruins, Vector3(11.0, 2.4, 2.0), Vector3(0.5, 0.8, -14.5), ruin_mat)
+		_spawn_box(ruins, Vector3(2.8, 3.8, 2.2), Vector3(-5.2, 1.5, -14.2), ruin_mat)
+		_spawn_box(ruins, Vector3(3.0, 3.6, 2.2), Vector3(5.6, 1.4, -14.0), ruin_mat)
+		_spawn_box(ruins, Vector3(2.4, 1.6, 2.2), Vector3(-8.2, 5.2, -16.0), ruin_mat, Vector3(6.0, 18.0, -8.0))
+		_spawn_box(ruins, Vector3(2.0, 1.4, 2.0), Vector3(8.4, 5.6, -15.5), ruin_mat, Vector3(-5.0, -15.0, 10.0))
+		_spawn_box(ruins, Vector3(0.95, 0.95, 0.95), Vector3(6.8, 4.2, -7.5), _stone_dark_mat, Vector3(22.0, 35.0, -18.0))
 
-	var banner_bg := StandardMaterial3D.new()
-	banner_bg.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	banner_bg.albedo_color = Color(0.86, 0.34, 0.92)
-	var banner_border := StandardMaterial3D.new()
-	banner_border.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	banner_border.albedo_color = Color(1.0, 0.72, 0.98)
+		var banner_bg := StandardMaterial3D.new()
+		banner_bg.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		banner_bg.albedo_color = Color(0.86, 0.34, 0.92)
+		var banner_border := StandardMaterial3D.new()
+		banner_border.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		banner_border.albedo_color = Color(1.0, 0.72, 0.98)
 
-	var banner := Node3D.new()
-	banner.position = Vector3(-0.8, 2.4, -13.2)
-	ruins.add_child(banner)
-	_spawn_box(banner, Vector3(2.8, 1.8, 0.2), Vector3.ZERO, banner_bg)
-	_spawn_box(banner, Vector3(1.4, 0.30, 0.26), Vector3(0.0, -0.30, 0.05), banner_border)
-	_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(-0.56, 0.06, 0.05), banner_border)
-	_spawn_box(banner, Vector3(0.28, 0.65, 0.26), Vector3(0.0, 0.12, 0.05), banner_border)
-	_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(0.56, 0.06, 0.05), banner_border)
+		var banner := Node3D.new()
+		banner.position = Vector3(-0.8, 2.4, -13.2)
+		ruins.add_child(banner)
+		_spawn_box(banner, Vector3(2.8, 1.8, 0.2), Vector3.ZERO, banner_bg)
+		_spawn_box(banner, Vector3(1.4, 0.30, 0.26), Vector3(0.0, -0.30, 0.05), banner_border)
+		_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(-0.56, 0.06, 0.05), banner_border)
+		_spawn_box(banner, Vector3(0.28, 0.65, 0.26), Vector3(0.0, 0.12, 0.05), banner_border)
+		_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(0.56, 0.06, 0.05), banner_border)
 
-	_spawn_box(ruins, Vector3(2.6, 2.2, 16.0), Vector3(-9.8, -0.2, -2.0), _stone_dark_mat)
-	_spawn_box(ruins, Vector3(2.6, 2.2, 16.0), Vector3(9.8, -0.2, -2.0), _stone_dark_mat)
+		_spawn_box(ruins, Vector3(2.6, 2.2, 16.0), Vector3(-9.8, -0.2, -2.0), _stone_dark_mat)
+		_spawn_box(ruins, Vector3(2.6, 2.2, 16.0), Vector3(9.8, -0.2, -2.0), _stone_dark_mat)
+	else:
+		var safe_b: Vector2 = server.get_safe_bounds_xz()
+		var north_z: float = -safe_b.y - 2.5
+		_spawn_box(ruins, Vector3(safe_b.x * 2.2, 3.2, 3.0), Vector3(0.0, 1.2, north_z), ruin_mat)
+		_spawn_box(ruins, Vector3(4.5, 5.5, 3.5), Vector3(-safe_b.x * 0.65, 2.4, north_z + 0.4), ruin_mat)
+		_spawn_box(ruins, Vector3(4.5, 5.5, 3.5), Vector3(safe_b.x * 0.65, 2.4, north_z + 0.4), ruin_mat)
+
+		# Side rock boundaries
+		var side_x: float = safe_b.x + 2.5
+		_spawn_box(ruins, Vector3(3.5, 2.8, safe_b.y * 2.2), Vector3(-side_x, 0.8, 0.0), _stone_dark_mat)
+		_spawn_box(ruins, Vector3(3.5, 2.8, safe_b.y * 2.2), Vector3(side_x, 0.8, 0.0), _stone_dark_mat)
 
 func _build_dust_and_action_accents() -> void:
 	var dust_mat := StandardMaterial3D.new()
