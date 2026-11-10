@@ -21,6 +21,7 @@ var target_ring_mesh: MeshInstance3D
 
 var _joystick_vec: Vector2 = Vector2.ZERO
 var _ability_queued: bool = false
+var _attack_queued: bool = false
 var _frame_counter: int = 0
 var _screenshot_path: String = ""
 var _target_screenshot_frame: int = 15
@@ -28,6 +29,8 @@ var _simulate_input_preview: bool = false
 var _preview_frenzy: bool = false
 var _preview_result: bool = false
 var _preview_clip: bool = false
+var _preview_tutorial_phase2: bool = false
+var _preview_tutorial_dismissed: bool = false
 var _web_first_frame_reported: bool = false
 var _web_first_input_reported: bool = false
 
@@ -44,6 +47,12 @@ func _ready() -> void:
 		server.match_elapsed_sec = balance.match_duration_sec - 0.05
 	if _preview_clip:
 		_stage_viral_clip_moment()
+	if _preview_tutorial_phase2 and hud != null:
+		hud.intro_tutorial_timer = 2.4
+		hud._intro_elapsed = 3.6
+	elif _preview_tutorial_dismissed and hud != null:
+		hud.intro_tutorial_timer = 0.0
+		hud._intro_elapsed = 6.0
 	if _simulate_input_preview and virtual_joystick != null:
 		virtual_joystick.simulate_drag(Vector2(210.0, 868.0), Vector2(246.0, 832.0))
 
@@ -51,7 +60,10 @@ func _exit_tree() -> void:
 	Engine.time_scale = 1.0
 
 func _parse_cmdline_args() -> void:
-	for arg: String in OS.get_cmdline_user_args():
+	var all_args: Array[String] = []
+	all_args.append_array(OS.get_cmdline_user_args())
+	all_args.append_array(OS.get_cmdline_args())
+	for arg: String in all_args:
 		if arg.begins_with("--capture-screenshot="):
 			_screenshot_path = arg.trim_prefix("--capture-screenshot=")
 		elif arg.begins_with("--screenshot-frame="):
@@ -64,6 +76,10 @@ func _parse_cmdline_args() -> void:
 			_preview_result = true
 		elif arg == "--preview-clip":
 			_preview_clip = true
+		elif arg == "--preview-tutorial-phase2":
+			_preview_tutorial_phase2 = true
+		elif arg == "--preview-tutorial-dismissed":
+			_preview_tutorial_dismissed = true
 
 func _setup_audio() -> void:
 	sound_controller = SoundController.new()
@@ -219,6 +235,7 @@ func _setup_ui() -> void:
 	layer.add_child(virtual_joystick)
 	virtual_joystick.joystick_updated.connect(_on_joystick_updated)
 	virtual_joystick.ability_triggered.connect(_on_ability_triggered)
+	virtual_joystick.attack_triggered.connect(_on_attack_triggered)
 
 	hud = VerticalHUD.new()
 	hud.name = "VerticalHUD"
@@ -255,23 +272,36 @@ func _on_joystick_updated(vec: Vector2) -> void:
 	_joystick_vec = vec
 	_mark_web_first_input()
 
+func _on_attack_triggered() -> void:
+	_attack_queued = true
+	_mark_web_first_input()
+	if hud != null and hud.intro_tutorial_timer > 1.2:
+		hud.intro_tutorial_timer = minf(hud.intro_tutorial_timer, 0.8)
+
 func _on_ability_triggered() -> void:
 	_ability_queued = true
 	if sound_controller != null:
 		sound_controller.play_dash_sfx()
 	_mark_web_first_input()
+	if hud != null and hud.intro_tutorial_timer > 1.2:
+		hud.intro_tutorial_timer = minf(hud.intro_tutorial_timer, 0.8)
 
 func _physics_process(_delta: float) -> void:
 	var kb_vec: Vector2 = Input.get_vector(&"move_left", &"move_right", &"move_up", &"move_down", balance.joystick_deadzone)
 	var combined: Vector2 = _joystick_vec if _joystick_vec.length_squared() > kb_vec.length_squared() else kb_vec
+	if Input.is_action_just_pressed(&"attack_action"):
+		_attack_queued = true
 	if Input.is_action_just_pressed(&"ability_action"):
 		_ability_queued = true
 		if sound_controller != null:
 			sound_controller.play_dash_sfx()
-	if combined.length_squared() > 0.001 or _ability_queued:
+	if combined.length_squared() > 0.001 or _ability_queued or _attack_queued:
 		_mark_web_first_input()
-	server.submit_client_input(0, combined, _ability_queued)
+		if hud != null and hud.intro_tutorial_timer > 1.2 and combined.length_squared() > 0.05:
+			hud.intro_tutorial_timer = minf(hud.intro_tutorial_timer, 0.8)
+	server.submit_client_input(0, combined, _ability_queued, _attack_queued)
 	_ability_queued = false
+	_attack_queued = false
 
 func _process(delta: float) -> void:
 	_frame_counter += 1

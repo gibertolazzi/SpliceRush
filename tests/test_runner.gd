@@ -18,6 +18,7 @@ func _initialize() -> void:
 		"test_90s_match_frenzy_collapse_result_and_rematch",
 		"test_3s_viral_clip_and_game_feel",
 		"test_logo_and_londrina_font_resources",
+		"test_manual_attack_and_bot_rebalance_and_animated_intro",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -345,4 +346,68 @@ func test_logo_and_londrina_font_resources() -> bool:
 	assert_true(hud.font_regular != null, "hud_has_font_regular")
 	assert_true(hud.logo_texture != null, "hud_has_logo_texture")
 	hud.free()
+	return true
+
+func test_manual_attack_and_bot_rebalance_and_animated_intro() -> bool:
+	# 1. Test translations for mobile attack button and animated tutorial
+	I18nService.register_translations()
+	TranslationServer.set_locale("it")
+	assert_eq(tr(&"HUD_ATTACK_BTN"), "ATTACCO", "it_hud_attack_btn")
+	assert_true(tr(&"HUD_TUTORIAL_STEAL_SUB").length() > 0, "it_hud_tutorial_steal_sub")
+	assert_true(tr(&"HUD_TUTORIAL_ABOM_SUB").length() > 0, "it_hud_tutorial_abom_sub")
+	assert_true(tr(&"HUD_TUTORIAL_TAP_TO_SKIP").length() > 0, "it_hud_tutorial_tap_to_skip")
+	TranslationServer.set_locale("en")
+	assert_eq(tr(&"HUD_ATTACK_BTN"), "ATTACK", "en_hud_attack_btn")
+	TranslationServer.set_locale("it")
+
+	# 2. Test bot loadouts & rebalanced difficulty
+	var srv := MatchServer.new()
+	srv.bots_enabled = false
+	root.add_child(srv)
+	# Verify bot loadouts don't have overpowered parts at match start
+	for i: int in range(1, srv.combatants.size()):
+		var b: MatchServer.CombatantState = srv.combatants[i]
+		# Ensure bots do not start with chainsaw arm or giant fist by default
+		assert_true(b.slots[PartData.Slot.ARMS] == &"base_fist" or b.slots[PartData.Slot.ARMS] == &"base_arms", "bot_starts_with_balanced_arms")
+
+	# 3. Test manual attack click / button
+	var p: MatchServer.CombatantState = srv.combatants[0]
+	var target_bot: MatchServer.CombatantState = srv.combatants[1]
+	p.pos = Vector2(0.0, 0.0)
+	p.attack_cooldown = 0.0
+	target_bot.pos = Vector2(1.2, 0.0)
+	target_bot.hp = 100
+	target_bot.attack_cooldown = 0.0
+
+	# Submit manual attack button press
+	srv.submit_client_input(0, Vector2.ZERO, false, true)
+	assert_eq(p.attack_requested, true, "manual_attack_requested_flag_set")
+
+	# Step simulation - manual attack must execute and damage bot
+	srv.step_simulation(1.0 / 30.0)
+	assert_true(target_bot.hp < 100, "manual_attack_damaged_enemy")
+	assert_true(target_bot.attack_cooldown >= 0.25, "manual_attack_staggered_enemy_cadence")
+
+	# 4. Test TouchJoystick Attack Button
+	var joy := TouchJoystick.new()
+	root.add_child(joy)
+	assert_true(joy.has_signal(&"attack_triggered"), "touch_joystick_has_attack_signal")
+	assert_true(joy.has_signal(&"ability_triggered"), "touch_joystick_has_ability_signal")
+	joy.free()
+
+	# 5. Test VerticalHUD intro tutorial timer lifecycle
+	var hud := VerticalHUD.new()
+	root.add_child(hud)
+	assert_eq(hud.intro_tutorial_timer, 6.0, "hud_starts_with_6s_intro_timer")
+	hud._process(3.5)
+	assert_true(hud.intro_tutorial_timer <= 2.5, "hud_advances_to_phase_2")
+	# Fast skip upon player action
+	hud.intro_tutorial_timer = minf(hud.intro_tutorial_timer, 0.8)
+	hud._process(0.9)
+	assert_eq(hud.intro_tutorial_timer, 0.0, "hud_intro_tutorial_fades_out_cleanly")
+	hud.on_match_restarted()
+	assert_eq(hud.intro_tutorial_timer, 6.0, "hud_resets_intro_on_rematch")
+
+	hud.free()
+	srv.free()
 	return true

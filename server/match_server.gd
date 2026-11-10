@@ -52,6 +52,7 @@ class CombatantState extends RefCounted:
 	var respawn_timer: float = 0.0
 	var move_input: Vector2 = Vector2.ZERO
 	var ability_requested: bool = false
+	var attack_requested: bool = false
 	var attack_cooldown: float = 0.0
 	var dash_cooldown: float = 0.0
 	var last_target_id: int = -1
@@ -248,17 +249,17 @@ func spawn_all_combatants() -> void:
 	]
 	var bot_loadouts: Array[Dictionary] = [
 		{},
-		{PartData.Slot.ARMS: &"giant_fist", PartData.Slot.LEGS: &"spring_legs"},
-		{PartData.Slot.HEAD: &"visor_head", PartData.Slot.CORE: &"shield_core"},
-		{PartData.Slot.HEAD: &"spike_helm", PartData.Slot.ARMS: &"giant_fist"},
-		{PartData.Slot.HEAD: &"laser_eye", PartData.Slot.LEGS: &"roller_wheels"},
-		{PartData.Slot.HEAD: &"visor_head", PartData.Slot.ARMS: &"chainsaw_arm"},
-		{PartData.Slot.CORE: &"magnet_core", PartData.Slot.LEGS: &"roller_wheels"},
-		{PartData.Slot.ARMS: &"mega_claws", PartData.Slot.CORE: &"shield_core"},
-		{PartData.Slot.HEAD: &"spike_helm", PartData.Slot.LEGS: &"rocket_legs"},
-		{PartData.Slot.ARMS: &"chainsaw_arm", PartData.Slot.LEGS: &"spring_legs"},
-		{PartData.Slot.CORE: &"crown_core", PartData.Slot.HEAD: &"visor_head"},
-		{PartData.Slot.ARMS: &"mega_claws", PartData.Slot.LEGS: &"rocket_legs"},
+		{PartData.Slot.LEGS: &"spring_legs"},
+		{PartData.Slot.HEAD: &"visor_head"},
+		{PartData.Slot.HEAD: &"spike_helm"},
+		{PartData.Slot.LEGS: &"roller_wheels"},
+		{PartData.Slot.HEAD: &"visor_head"},
+		{PartData.Slot.CORE: &"shield_core"},
+		{PartData.Slot.HEAD: &"spike_helm"},
+		{PartData.Slot.LEGS: &"spring_legs"},
+		{PartData.Slot.HEAD: &"visor_head"},
+		{PartData.Slot.CORE: &"magnet_core"},
+		{PartData.Slot.LEGS: &"roller_wheels"},
 	]
 	for i: int in range(balance.max_combatants):
 		var c := CombatantState.new()
@@ -365,7 +366,7 @@ func equip_part_on_combatant(combatant_id: int, part_id: StringName) -> bool:
 	_recalc_combatant_stats(c, true)
 	return true
 
-func submit_client_input(combatant_id: int, move_vec: Vector2, ability_pressed: bool) -> void:
+func submit_client_input(combatant_id: int, move_vec: Vector2, ability_pressed: bool, attack_pressed: bool = false) -> void:
 	if combatant_id < 0 or combatant_id >= combatants.size():
 		return
 	var c: CombatantState = combatants[combatant_id]
@@ -375,6 +376,8 @@ func submit_client_input(combatant_id: int, move_vec: Vector2, ability_pressed: 
 		c.move_input = move_vec
 	if ability_pressed:
 		c.ability_requested = true
+	if attack_pressed:
+		c.attack_requested = true
 
 func _physics_process(delta: float) -> void:
 	var tick_dt: float = 1.0 / float(maxi(balance.server_tick_hz, 1))
@@ -456,7 +459,8 @@ func step_simulation(dt: float) -> void:
 			_record_event(&"dash", c.id, -1, c.pos)
 		c.ability_requested = false
 
-		var desired_vel: Vector2 = c.move_input * (balance.base_move_speed * c.speed_mult)
+		var speed_factor: float = 0.85 if c.is_bot else 1.0
+		var desired_vel: Vector2 = c.move_input * (balance.base_move_speed * c.speed_mult * speed_factor)
 		if c.move_input.length_squared() > 0.001:
 			c.vel = c.vel.move_toward(desired_vel, balance.acceleration * dt)
 			c.facing_angle = lerp_angle(c.facing_angle, c.move_input.angle(), minf(1.0, 14.0 * dt))
@@ -471,8 +475,12 @@ func step_simulation(dt: float) -> void:
 	_update_dropped_parts(dt)
 
 	for c: CombatantState in combatants:
-		if c.alive and c.attack_cooldown <= 0.0:
-			_try_auto_attack(c)
+		if c.alive:
+			if c.attack_requested:
+				_try_auto_attack(c, true)
+				c.attack_requested = false
+			elif c.attack_cooldown <= 0.0:
+				_try_auto_attack(c, false)
 
 	_prune_event_log()
 	state_ticked.emit(get_time_remaining())
@@ -646,10 +654,19 @@ func find_nearest_enemy(attacker_id: int, max_range: float) -> CombatantState:
 			best = other
 	return best
 
-func _try_auto_attack(attacker: CombatantState) -> bool:
+func _try_auto_attack(attacker: CombatantState, force_manual: bool = false) -> bool:
 	var eff_range: float = balance.auto_attack_range * attacker.range_mult
-	var eff_damage: int = maxi(1, int(round(float(balance.auto_attack_damage) * attacker.damage_mult)))
-	var eff_cd: float = balance.auto_attack_cooldown_sec * attacker.cooldown_mult
+	var base_dmg: float = float(balance.auto_attack_damage) * attacker.damage_mult
+	if attacker.is_bot:
+		# Bot difficulty rebalancing: bots deal 60% base damage
+		base_dmg *= 0.60
+	var eff_damage: int = maxi(1, int(round(base_dmg)))
+
+	var base_cd: float = balance.auto_attack_cooldown_sec * attacker.cooldown_mult
+	if attacker.is_bot:
+		# Natural attack cadence for bots (~0.77s) instead of instant spam
+		base_cd *= 1.40
+	var eff_cd: float = base_cd
 
 	var target: CombatantState = find_nearest_enemy(attacker.id, eff_range)
 	if target != null:
@@ -661,6 +678,9 @@ func _try_auto_attack(attacker: CombatantState) -> bool:
 			attacker.facing_angle = dir.angle()
 		target.hp -= eff_damage
 		target.hurt_anim_timer = 0.18
+		if not attacker.is_bot and target.is_bot:
+			# Player hits stagger bots briefly (0.28s cooldown delay on bot)
+			target.attack_cooldown = maxf(target.attack_cooldown, 0.28)
 		target.vel += dir * balance.auto_attack_knockback * attacker.damage_mult
 		if target.hp <= 0:
 			_handle_combatant_death(target, attacker)
@@ -688,6 +708,14 @@ func _try_auto_attack(attacker: CombatantState) -> bool:
 			attacker.facing_angle = dir.angle()
 		damage_block(nearest_block_cell, eff_damage)
 		attack_performed.emit(attacker.id, -1, attacker.pos, block_xz, eff_damage)
+		return true
+
+	if force_manual:
+		# Manual attack with no targets in immediate range: punch the air
+		attacker.attack_cooldown = eff_cd * 0.70
+		attacker.attack_anim_timer = 0.22
+		var forward_pt: Vector2 = attacker.pos + Vector2(cos(attacker.facing_angle), sin(attacker.facing_angle)) * (eff_range * 0.7)
+		attack_performed.emit(attacker.id, -1, attacker.pos, forward_pt, 0)
 		return true
 
 	return false

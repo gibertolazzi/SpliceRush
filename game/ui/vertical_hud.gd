@@ -28,6 +28,10 @@ var _speed_lines_timer: float = 0.0
 var _rematch_btn_rect := Rect2(Vector2(110.0, 560.0), Vector2(320.0, 58.0))
 var overhead_combatant_data: Array[Dictionary] = []
 
+var intro_tutorial_timer: float = 6.0
+var _intro_elapsed: float = 0.0
+var _abom_banner_timer: float = 0.0
+
 var font_bold: Font = preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
 var font_regular: Font = preload("res://game/ui/fonts/LondrinaSolid-Regular.ttf")
 var logo_texture: Texture2D = preload("res://game/ui/assets/logo.svg")
@@ -39,6 +43,13 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	var needs_redraw: bool = false
+	if intro_tutorial_timer > 0.0:
+		intro_tutorial_timer = maxf(0.0, intro_tutorial_timer - delta)
+		_intro_elapsed += delta
+		needs_redraw = true
+	if _abom_banner_timer > 0.0:
+		_abom_banner_timer = maxf(0.0, _abom_banner_timer - delta)
+		needs_redraw = true
 	if _toast_timer > 0.0:
 		_toast_timer = maxf(0.0, _toast_timer - delta)
 		if _toast_timer <= 0.0:
@@ -103,6 +114,9 @@ func on_match_restarted() -> void:
 	show_result_overlay = false
 	is_frenzy = false
 	_toast_timer = 0.0
+	intro_tutorial_timer = 6.0
+	_intro_elapsed = 0.0
+	_abom_banner_timer = 0.0
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	queue_redraw()
 
@@ -112,6 +126,10 @@ func on_stolen_parts_updated(new_count: int) -> void:
 		queue_redraw()
 
 func on_player_slots_updated(slots: Dictionary, abom: bool, mass: int) -> void:
+	if abom and not is_abomination:
+		_abom_banner_timer = 2.8
+		_flash_timer = 0.35
+		_speed_lines_timer = 0.65
 	equipped_slots = slots.duplicate()
 	is_abomination = abom
 	total_mass = mass
@@ -253,57 +271,11 @@ func _draw() -> void:
 		_draw_chamfer_panel(toast_rect, Color(0.10, 0.06, 0.24, 0.96), gold, 5.0)
 		draw_string(font_bold, toast_rect.position + Vector2(8.0, 20.0), _toast_text, HORIZONTAL_ALIGNMENT_CENTER, 168.0, 15, gold)
 
-	# 4. BOTTOM-LEFT: Tutorial Callout ("RUBA I PEZZI!" + 4-Slot Body Diagram)
-	var callout_pos := Vector2(12.0, rect_size.y - 304.0)
-	var header_pts := PackedVector2Array([
-		callout_pos + Vector2(0.0, 8.0),
-		callout_pos + Vector2(104.0, 0.0),
-		callout_pos + Vector2(98.0, 42.0),
-		callout_pos + Vector2(4.0, 48.0),
-	])
-	draw_colored_polygon(header_pts, Color(0.06, 0.06, 0.14, 0.96))
-	var steal_lines: PackedStringArray = tr(&"HUD_STEAL_PARTS").split("\n")
-	if steal_lines.size() > 0:
-		draw_string(font_bold, callout_pos + Vector2(12.0, 21.0), steal_lines[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, white)
-	if steal_lines.size() > 1:
-		draw_string(font_bold, callout_pos + Vector2(12.0, 37.0), steal_lines[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, gold)
+	# 4. ANIMATED INTRO ONBOARDING ("RUBA I PEZZI!" & "DIVENTA L'ABOMINIO!")
+	_draw_animated_intro_tutorial(rect_size)
 
-	var diag_rect := Rect2(callout_pos + Vector2(2.0, 50.0), Vector2(114.0, 128.0))
-	_draw_chamfer_panel(diag_rect, navy_bg, border_col, 6.0)
-	var fig_c := diag_rect.position + Vector2(32.0, 66.0)
-	draw_rect(Rect2(fig_c + Vector2(-9.0, -34.0), Vector2(18.0, 16.0)), Color(0.95, 0.92, 0.84), true)
-	draw_rect(Rect2(fig_c + Vector2(-12.0, -15.0), Vector2(24.0, 26.0)), Color(0.95, 0.92, 0.84), true)
-	draw_rect(Rect2(fig_c + Vector2(-21.0, -14.0), Vector2(8.0, 22.0)), Color(0.95, 0.92, 0.84), true)
-	draw_rect(Rect2(fig_c + Vector2(13.0, -14.0), Vector2(8.0, 22.0)), Color(0.95, 0.92, 0.84), true)
-	draw_rect(Rect2(fig_c + Vector2(-11.0, 12.0), Vector2(9.0, 24.0)), Color(0.95, 0.92, 0.84), true)
-	draw_rect(Rect2(fig_c + Vector2(2.0, 12.0), Vector2(9.0, 24.0)), Color(0.95, 0.92, 0.84), true)
-
-	for i: int in range(4):
-		var slot_enum: PartData.Slot = display_slot_order[i]
-		var pid: StringName = equipped_slots.get(slot_enum, PartCatalog.get_base_part_for_slot(slot_enum)) as StringName
-		var pdata: PartData = PartCatalog.get_part(pid)
-		var r_col: Color = PartCatalog.get_rarity_color(pdata.rarity)
-		var icon_c := diag_rect.position + Vector2(88.0, 22.0 + float(i) * 28.0)
-		draw_line(fig_c + Vector2(14.0, -18.0 + float(i) * 12.0), icon_c + Vector2(-14.0, 0.0), Color(0.75, 0.78, 0.92, 0.85), 1.6)
-		draw_circle(icon_c, 11.0, Color(0.16, 0.16, 0.32, 0.95))
-		_draw_slot_mini_icon(i, icon_c, r_col)
-
-	# 5. BOTTOM-RIGHT: Tilted "DIVENTA L'ABOMINIO!" Banner with Magenta Border & Crown
-	var abom_origin := Vector2(rect_size.x - 196.0, rect_size.y - 122.0)
-	var abom_pts := PackedVector2Array([
-		abom_origin + Vector2(10.0, 18.0),
-		abom_origin + Vector2(184.0, 4.0),
-		abom_origin + Vector2(176.0, 78.0),
-		abom_origin + Vector2(0.0, 90.0),
-	])
-	draw_colored_polygon(abom_pts, Color(0.05, 0.04, 0.14, 0.96))
-	draw_polyline(abom_pts, gold if is_abomination else magenta, 3.2)
-	_draw_crown(abom_origin + Vector2(132.0, 0.0), 18.0, gold)
-	var abom_lines: PackedStringArray = tr(&"HUD_BECOME_ABOMINATION").split("\n")
-	if abom_lines.size() > 0:
-		draw_string(font_bold, abom_origin + Vector2(36.0, 42.0), abom_lines[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 19, white)
-	if abom_lines.size() > 1:
-		draw_string(font_bold, abom_origin + Vector2(18.0, 70.0), abom_lines[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 23, gold)
+	# 5. ABOMINATION TRANSFORMATION STINGER BANNER
+	_draw_abomination_active_banner(rect_size)
 
 	# 6. 5-SECOND RESULT OVERLAY & 1-TAP REMATCH BUTTON (Passo 3)
 	if show_result_overlay:
@@ -337,6 +309,148 @@ func _draw() -> void:
 		# 5-second countdown bar at bottom of result card
 		var bar_w: float = 330.0 * clampf(result_countdown_sec / 5.0, 0.0, 1.0)
 		draw_rect(Rect2(Vector2(_rematch_btn_rect.position.x, card_rect.end.y - 22.0), Vector2(bar_w, 6.0)), gold, true)
+
+func _draw_animated_intro_tutorial(rect_size: Vector2) -> void:
+	if intro_tutorial_timer <= 0.0 or show_result_overlay:
+		return
+
+	var enter_fade: float = clampf(_intro_elapsed / 0.30, 0.0, 1.0)
+	var exit_fade: float = clampf(intro_tutorial_timer / 0.80, 0.0, 1.0)
+	var alpha: float = minf(enter_fade, exit_fade)
+	if alpha <= 0.001:
+		return
+
+	var is_phase_1: bool = (intro_tutorial_timer > 3.0)
+	var card_w: float = clampf(rect_size.x - 48.0, 320.0, 440.0)
+	var card_h: float = 230.0
+	var card_center := Vector2(rect_size.x * 0.5, rect_size.y * 0.44)
+	var card_rect := Rect2(card_center - Vector2(card_w * 0.5, card_h * 0.5), Vector2(card_w, card_h))
+
+	var navy_bg := Color(0.06, 0.05, 0.16, 0.94 * alpha)
+	var border_col := Color(0.48, 0.42, 0.78, 0.92 * alpha)
+	var magenta := Color(1.0, 0.18, 0.576, alpha)
+	var gold := Color(1.0, 0.76, 0.12, alpha)
+	var white := Color(0.98, 0.98, 1.0, alpha)
+
+	if is_phase_1:
+		# PHASE 1: RUBA I PEZZI! (0.0s - 3.0s)
+		_draw_chamfer_panel(card_rect, navy_bg, border_col, 10.0)
+
+		# Tilted animated header
+		var bounce_y: float = sin(_intro_elapsed * 6.5) * 3.5
+		var banner_rect := Rect2(Vector2(card_rect.position.x + 20.0, card_rect.position.y + 12.0 + bounce_y), Vector2(card_w - 40.0, 36.0))
+		_draw_chamfer_panel(banner_rect, Color(0.12, 0.08, 0.28, 0.96 * alpha), gold, 6.0)
+		draw_string(font_bold, banner_rect.position + Vector2(10.0, 26.0), tr(&"HUD_STEAL_PARTS").replace("\n", " "), HORIZONTAL_ALIGNMENT_CENTER, banner_rect.size.x - 20.0, 22, gold)
+
+		# Subtitle
+		draw_string(font_regular, card_rect.position + Vector2(14.0, 72.0), tr(&"HUD_TUTORIAL_STEAL_SUB"), HORIZONTAL_ALIGNMENT_CENTER, card_w - 28.0, 16, Color(0.85, 0.84, 0.96, alpha))
+
+		# Interactive 4-Slot Character Breakdown
+		var fig_c := card_rect.position + Vector2(card_w * 0.24, 136.0)
+		var fig_col := Color(0.95, 0.92, 0.84, alpha)
+		draw_rect(Rect2(fig_c + Vector2(-9.0, -32.0), Vector2(18.0, 16.0)), fig_col, true)
+		draw_rect(Rect2(fig_c + Vector2(-12.0, -14.0), Vector2(24.0, 24.0)), fig_col, true)
+		draw_rect(Rect2(fig_c + Vector2(-20.0, -12.0), Vector2(7.0, 20.0)), fig_col, true)
+		draw_rect(Rect2(fig_c + Vector2(13.0, -12.0), Vector2(7.0, 20.0)), fig_col, true)
+		draw_rect(Rect2(fig_c + Vector2(-10.0, 12.0), Vector2(8.0, 22.0)), fig_col, true)
+		draw_rect(Rect2(fig_c + Vector2(2.0, 12.0), Vector2(8.0, 22.0)), fig_col, true)
+
+		var display_slot_order: Array[PartData.Slot] = [
+			PartData.Slot.ARMS,
+			PartData.Slot.LEGS,
+			PartData.Slot.HEAD,
+			PartData.Slot.CORE,
+		]
+		var limb_targets: Array[Vector2] = [
+			fig_c + Vector2(16.0, -2.0),
+			fig_c + Vector2(6.0, 20.0),
+			fig_c + Vector2(0.0, -24.0),
+			fig_c + Vector2(0.0, -2.0),
+		]
+		var slots_start_x: float = card_rect.position.x + card_w * 0.42
+		var slot_spacing_x: float = (card_w * 0.54) / 4.0
+
+		for s_idx: int in range(4):
+			var slot_enum: PartData.Slot = display_slot_order[s_idx]
+			var pid: StringName = equipped_slots.get(slot_enum, PartCatalog.get_base_part_for_slot(slot_enum)) as StringName
+			var pdata: PartData = PartCatalog.get_part(pid)
+			var r_col: Color = PartCatalog.get_rarity_color(pdata.rarity)
+			r_col.a = alpha
+
+			var reveal_delay: float = 0.12 + float(s_idx) * 0.18
+			var pop: float = clampf((_intro_elapsed - reveal_delay) / 0.22, 0.0, 1.0)
+			if pop > 0.0:
+				var scale_bounce: float = 1.0 + sin(pop * PI) * 0.22 if pop < 1.0 else 1.0
+				var box_size := Vector2(38.0, 46.0) * scale_bounce
+				var box_pos := Vector2(slots_start_x + float(s_idx) * slot_spacing_x, card_rect.position.y + 112.0) - (box_size - Vector2(38.0, 46.0)) * 0.5
+				var box_r := Rect2(box_pos, box_size)
+				# Draw connecting line from puppet
+				draw_line(limb_targets[s_idx], box_r.position + Vector2(0.0, box_r.size.y * 0.5), Color(0.72, 0.76, 0.95, 0.65 * alpha * pop), 1.6)
+				draw_rect(box_r, Color(0.12, 0.10, 0.26, 0.95 * alpha), true)
+				draw_rect(box_r, r_col, false, 2.0)
+				_draw_slot_mini_icon(s_idx, box_r.get_center() - Vector2(0.0, 4.0), r_col)
+				draw_rect(Rect2(Vector2(box_r.position.x + 4.0, box_r.end.y - 6.0), Vector2(box_r.size.x - 8.0, 2.5)), r_col, true)
+
+		# Tap/move to start prompt
+		var hint_alpha: float = alpha * (0.55 + 0.45 * sin(_intro_elapsed * 5.0))
+		draw_string(font_regular, card_rect.position + Vector2(10.0, card_h - 16.0), tr(&"HUD_TUTORIAL_TAP_TO_SKIP"), HORIZONTAL_ALIGNMENT_CENTER, card_w - 20.0, 14, Color(1.0, 0.88, 0.50, hint_alpha))
+
+	else:
+		# PHASE 2: DIVENTA L'ABOMINIO! (3.0s - 6.0s)
+		_draw_chamfer_panel(card_rect, Color(0.16, 0.04, 0.20, 0.96 * alpha), magenta, 10.0)
+
+		# Pulsing Gold Crown
+		var p2_time: float = _intro_elapsed - 3.0
+		var crown_pulse: float = 1.0 + sin(p2_time * 7.0) * 0.15
+		var crown_c := Vector2(card_center.x, card_rect.position.y - 12.0)
+		_draw_crown(crown_c, 24.0 * crown_pulse, gold)
+
+		# Radiant golden accent lines behind crown
+		for ray_i: int in range(8):
+			var ang: float = -PI * 0.85 + float(ray_i) * (PI * 0.70 / 7.0)
+			var r_dir := Vector2(cos(ang), sin(ang))
+			draw_line(crown_c + r_dir * 18.0, crown_c + r_dir * (28.0 + 4.0 * sin(p2_time * 8.0 + float(ray_i))), Color(1.0, 0.85, 0.25, 0.65 * alpha), 2.2)
+
+		# Title
+		var banner_rect := Rect2(Vector2(card_rect.position.x + 20.0, card_rect.position.y + 16.0), Vector2(card_w - 40.0, 36.0))
+		_draw_chamfer_panel(banner_rect, Color(0.24, 0.04, 0.18, 0.98 * alpha), magenta, 6.0)
+		draw_string(font_bold, banner_rect.position + Vector2(10.0, 26.0), tr(&"HUD_BECOME_ABOMINATION").replace("\n", " "), HORIZONTAL_ALIGNMENT_CENTER, banner_rect.size.x - 20.0, 23, gold)
+
+		# Subtitle
+		draw_string(font_regular, card_rect.position + Vector2(14.0, 74.0), tr(&"HUD_TUTORIAL_ABOM_SUB"), HORIZONTAL_ALIGNMENT_CENTER, card_w - 28.0, 16, Color(0.95, 0.88, 1.0, alpha))
+
+		# Epic Abomination Perk Badges in Center (Localized)
+		var badge_y: float = card_rect.position.y + 104.0
+		var perks: Array[String] = [
+			tr(&"HUD_TUTORIAL_PERK_STATS"),
+			tr(&"HUD_TUTORIAL_PERK_CROWN"),
+			tr(&"HUD_TUTORIAL_PERK_HUNT"),
+		]
+		var perk_cols: Array[Color] = [gold, Color(1.0, 0.45, 0.2), magenta]
+		var col_w: float = (card_w - 36.0) / 3.0
+		for pk_i: int in range(3):
+			var pk_rect := Rect2(Vector2(card_rect.position.x + 18.0 + float(pk_i) * col_w, badge_y), Vector2(col_w - 8.0, 44.0))
+			_draw_chamfer_panel(pk_rect, Color(0.08, 0.06, 0.22, 0.92 * alpha), perk_cols[pk_i] * alpha, 5.0)
+			draw_string(font_bold, pk_rect.position + Vector2(2.0, 28.0), perks[pk_i], HORIZONTAL_ALIGNMENT_CENTER, pk_rect.size.x - 4.0, 13, perk_cols[pk_i] * alpha)
+
+		# Tap/move to start prompt
+		var hint_alpha: float = alpha * (0.55 + 0.45 * sin(p2_time * 5.0))
+		draw_string(font_regular, card_rect.position + Vector2(10.0, card_h - 16.0), tr(&"HUD_TUTORIAL_TAP_TO_SKIP"), HORIZONTAL_ALIGNMENT_CENTER, card_w - 20.0, 14, Color(1.0, 0.88, 0.50, hint_alpha))
+
+func _draw_abomination_active_banner(rect_size: Vector2) -> void:
+	if _abom_banner_timer <= 0.0 or show_result_overlay:
+		return
+	var b_alpha: float = clampf(_abom_banner_timer / 0.4, 0.0, 1.0)
+	var ban_w: float = minf(380.0, rect_size.x - 40.0)
+	var ban_h: float = 64.0
+	var ban_rect := Rect2(Vector2((rect_size.x - ban_w) * 0.5, 96.0), Vector2(ban_w, ban_h))
+	_draw_chamfer_panel(ban_rect, Color(0.26, 0.04, 0.18, 0.98 * b_alpha), Color(1.0, 0.76, 0.12, b_alpha), 8.0)
+	_draw_crown(Vector2(ban_rect.get_center().x, ban_rect.position.y + 4.0), 16.0, Color(1.0, 0.76, 0.12, b_alpha))
+	var active_lines: PackedStringArray = tr(&"HUD_ABOMINATION_ACTIVE").split("\n")
+	var line1: String = active_lines[0] if active_lines.size() > 0 else ""
+	var line2: String = active_lines[1] if active_lines.size() > 1 else tr(&"HUD_ABOMINATION_HUNT")
+	var full_text: String = "%s %s" % [line1, line2]
+	draw_string(font_bold, ban_rect.position + Vector2(8.0, 42.0), full_text, HORIZONTAL_ALIGNMENT_CENTER, ban_w - 16.0, 20, Color(1.0, 0.88, 0.2, b_alpha))
 
 func _draw_chamfer_panel(r: Rect2, fill: Color, border: Color, cut: float) -> void:
 	var pts := PackedVector2Array([
