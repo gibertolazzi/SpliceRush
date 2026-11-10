@@ -90,21 +90,21 @@ class CombatantState extends RefCounted:
 	}
 
 const FIGHTER_PALETTE: Array[Color] = [
-	Color(0.45, 0.08, 0.78), # 0: Player Purple (Crown shirt)
-	Color(0.86, 0.12, 0.18), # 1: Red fighter
-	Color(0.16, 0.42, 0.92), # 2: Blue fighter (visor)
-	Color(0.32, 0.72, 0.18), # 3: Green fighter (mohawk)
-	Color(1.00, 0.68, 0.14), # 4: Yellow-Orange fighter (laser)
-	Color(0.18, 0.34, 0.78), # 5: Deep Blue fighter
-	Color(0.95, 0.22, 0.58), # 6: Hot Pink fighter
-	Color(0.12, 0.78, 0.76), # 7: Cyan-Teal fighter
-	Color(0.96, 0.42, 0.14), # 8: Coral Orange fighter
-	Color(0.58, 0.84, 0.16), # 9: Lime fighter
-	Color(0.64, 0.28, 0.92), # 10: Lavender fighter
-	Color(0.92, 0.82, 0.22), # 11: Gold fighter
+	Color(0.50, 0.12, 0.88), # 0: Player Purple (Crown shirt)
+	Color(0.98, 0.18, 0.22), # 1: Vivid Crimson
+	Color(0.12, 0.52, 1.00), # 2: Cobalt Blue
+	Color(0.20, 0.90, 0.32), # 3: Toxic Lime
+	Color(1.00, 0.65, 0.05), # 4: Electric Amber
+	Color(0.05, 0.88, 0.98), # 5: Vivid Cyan
+	Color(1.00, 0.16, 0.65), # 6: Hot Magenta
+	Color(0.10, 0.92, 0.62), # 7: Mint Green
+	Color(1.00, 0.40, 0.08), # 8: Vibrant Tangerine
+	Color(0.68, 0.22, 1.00), # 9: Neon Violet
+	Color(1.00, 0.90, 0.10), # 10: Acid Yellow
+	Color(0.92, 0.15, 0.45), # 11: Berry Pink
 ]
 
-const PEDESTAL_WORLD_XZ := Vector2(2.2, -4.8)
+const PEDESTAL_WORLD_XZ := Vector2(0.0, 0.0)
 
 @export var balance: BalanceConfig = preload("res://shared/default_balance.tres")
 @export var bots_enabled: bool = true

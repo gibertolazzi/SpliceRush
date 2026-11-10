@@ -16,8 +16,12 @@ var active_debris: Array[Dictionary] = []
 var _stone_mat_a: StandardMaterial3D
 var _stone_mat_b: StandardMaterial3D
 var _stone_dark_mat: StandardMaterial3D
+var _stone_rim_mat: StandardMaterial3D
+var _debris_mat: StandardMaterial3D
 var _gold_glow_mat: StandardMaterial3D
 var _white_glow_mat: StandardMaterial3D
+var _cloud_mat_a: StandardMaterial3D
+var _cloud_mat_b: StandardMaterial3D
 var _rarity_mats: Dictionary = {}
 
 func _ready() -> void:
@@ -25,24 +29,42 @@ func _ready() -> void:
 
 func _init_materials() -> void:
 	_stone_mat_a = StandardMaterial3D.new()
-	_stone_mat_a.albedo_color = Color(0.44, 0.36, 0.62) # #7A6BB0 violet-lavender
-	_stone_mat_a.roughness = 0.82
+	_stone_mat_a.albedo_color = Color(0.24, 0.21, 0.32) # Dark desaturated slate-lavender
+	_stone_mat_a.roughness = 0.84
 
 	_stone_mat_b = StandardMaterial3D.new()
-	_stone_mat_b.albedo_color = Color(0.35, 0.28, 0.54) # #5B4B8A deeper lavender
-	_stone_mat_b.roughness = 0.86
+	_stone_mat_b.albedo_color = Color(0.18, 0.16, 0.26) # Deeper desaturated slate
+	_stone_mat_b.roughness = 0.88
+
+	_stone_rim_mat = StandardMaterial3D.new()
+	_stone_rim_mat.albedo_color = Color(0.42, 0.38, 0.52) # Light stone rim & crack highlight
+	_stone_rim_mat.roughness = 0.78
 
 	_stone_dark_mat = StandardMaterial3D.new()
-	_stone_dark_mat.albedo_color = Color(0.20, 0.15, 0.34)
-	_stone_dark_mat.roughness = 0.90
+	_stone_dark_mat.albedo_color = Color(0.11, 0.09, 0.16) # Deep cliff foundation
+	_stone_dark_mat.roughness = 0.92
+
+	_debris_mat = StandardMaterial3D.new()
+	_debris_mat.albedo_color = Color(0.90, 0.84, 0.74) # Bright cream-sandstone fractured chunks
+	_debris_mat.roughness = 0.72
 
 	_gold_glow_mat = StandardMaterial3D.new()
 	_gold_glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_gold_glow_mat.albedo_color = Color(1.0, 0.72, 0.14)
+	_gold_glow_mat.albedo_color = Color(1.0, 0.74, 0.14)
 
 	_white_glow_mat = StandardMaterial3D.new()
 	_white_glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_white_glow_mat.albedo_color = Color(1.0, 0.96, 0.82)
+	_white_glow_mat.albedo_color = Color(1.0, 0.96, 0.84)
+
+	_cloud_mat_a = StandardMaterial3D.new()
+	_cloud_mat_a.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_cloud_mat_a.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_cloud_mat_a.albedo_color = Color(0.36, 0.24, 0.62, 0.45)
+
+	_cloud_mat_b = StandardMaterial3D.new()
+	_cloud_mat_b.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_cloud_mat_b.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_cloud_mat_b.albedo_color = Color(0.24, 0.16, 0.44, 0.60)
 
 	for r: int in [PartData.Rarity.COMMON, PartData.Rarity.RARE, PartData.Rarity.EPIC, PartData.Rarity.LEGENDARY]:
 		var rmat := StandardMaterial3D.new()
@@ -55,17 +77,23 @@ func apply_theme_materials(theme: MatchServer.MapTheme) -> void:
 		_init_materials()
 	match theme:
 		MatchServer.MapTheme.CYBER_FACTORY:
-			_stone_mat_a.albedo_color = Color(0.20, 0.22, 0.26)
-			_stone_mat_b.albedo_color = Color(0.28, 0.30, 0.35)
-			_stone_dark_mat.albedo_color = Color(0.10, 0.12, 0.15)
+			_stone_mat_a.albedo_color = Color(0.16, 0.18, 0.22)
+			_stone_mat_b.albedo_color = Color(0.12, 0.14, 0.18)
+			_stone_dark_mat.albedo_color = Color(0.08, 0.09, 0.12)
+			_stone_rim_mat.albedo_color = Color(0.32, 0.38, 0.46)
+			_debris_mat.albedo_color = Color(0.72, 0.82, 0.92)
 		MatchServer.MapTheme.FLOATING_HEX:
-			_stone_mat_a.albedo_color = Color(0.55, 0.62, 0.75)
-			_stone_mat_b.albedo_color = Color(0.38, 0.45, 0.60)
-			_stone_dark_mat.albedo_color = Color(0.15, 0.20, 0.32)
+			_stone_mat_a.albedo_color = Color(0.28, 0.34, 0.46)
+			_stone_mat_b.albedo_color = Color(0.20, 0.24, 0.36)
+			_stone_dark_mat.albedo_color = Color(0.12, 0.15, 0.24)
+			_stone_rim_mat.albedo_color = Color(0.50, 0.58, 0.72)
+			_debris_mat.albedo_color = Color(0.85, 0.90, 1.0)
 		_:
-			_stone_mat_a.albedo_color = Color(0.44, 0.36, 0.62)
-			_stone_mat_b.albedo_color = Color(0.35, 0.28, 0.54)
-			_stone_dark_mat.albedo_color = Color(0.20, 0.15, 0.34)
+			_stone_mat_a.albedo_color = Color(0.24, 0.21, 0.32)
+			_stone_mat_b.albedo_color = Color(0.18, 0.16, 0.26)
+			_stone_dark_mat.albedo_color = Color(0.11, 0.09, 0.16)
+			_stone_rim_mat.albedo_color = Color(0.42, 0.38, 0.52)
+			_debris_mat.albedo_color = Color(0.90, 0.84, 0.74)
 
 func build_from_server(server: MatchServer) -> void:
 	if _stone_mat_a == null:
@@ -82,13 +110,15 @@ func build_from_server(server: MatchServer) -> void:
 	var tile: float = server.balance.tile_size
 	_build_floor_multimesh(server, tile)
 	_build_grid_props(server, tile)
+	_build_void_clouds(server)
 
 	var is_static_preview: bool = false
 	for arg: String in OS.get_cmdline_user_args():
 		if arg == "--static-preview":
 			is_static_preview = true
 
-	var ped_pos: Vector3 = Vector3(2.2, 0.0, -4.8) if is_static_preview else Vector3(MatchServer.PEDESTAL_WORLD_XZ.x, 0.0, MatchServer.PEDESTAL_WORLD_XZ.y)
+	# Pedestal is always situated right at the center of the arena
+	var ped_pos := Vector3(0.0, 0.0, 0.0)
 	_build_power_pedestal(ped_pos)
 	_build_background_ruins_and_cliffs(server, is_static_preview)
 	if is_static_preview:
@@ -207,13 +237,32 @@ func sync_dropped_parts(drops: Array[MatchServer.DroppedPartState], dt: float) -
 				item_mesh.position.y = 0.66 + sin(t_sec + float(drop.id)) * 0.14
 
 func _build_floor_multimesh(server: MatchServer, tile: float) -> void:
+	# 1. Main floating island foundation (monolithic rock slab with cliff depth)
+	var island_root := Node3D.new()
+	island_root.name = "FloatingIslandBase"
+	add_child(island_root)
+
+	var base_w: float = float(server.balance.grid_width) * tile
+	var base_d: float = float(server.balance.grid_depth) * tile
+
 	floor_base_mi = MeshInstance3D.new()
 	var base_box := BoxMesh.new()
-	base_box.size = Vector3(float(server.balance.grid_width) * tile + 1.2, 1.4, float(server.balance.grid_depth) * tile + 1.2)
+	base_box.size = Vector3(base_w + 1.6, 1.4, base_d + 1.6)
 	floor_base_mi.mesh = base_box
-	floor_base_mi.position = Vector3(0.0, -0.82, 0.0)
+	floor_base_mi.position = Vector3(0.0, -0.72, 0.0)
 	floor_base_mi.material_override = _stone_dark_mat
-	add_child(floor_base_mi)
+	island_root.add_child(floor_base_mi)
+
+	# Lighter perimeter stone ledge trim (crisp edge definition)
+	_spawn_box(island_root, Vector3(base_w + 1.8, 0.14, 0.32), Vector3(0.0, -0.05, -base_d * 0.5 - 0.72), _stone_rim_mat)
+	_spawn_box(island_root, Vector3(base_w + 1.8, 0.14, 0.32), Vector3(0.0, -0.05, base_d * 0.5 + 0.72), _stone_rim_mat)
+	_spawn_box(island_root, Vector3(0.32, 0.14, base_d + 1.8), Vector3(-base_w * 0.5 - 0.72, -0.05, 0.0), _stone_rim_mat)
+	_spawn_box(island_root, Vector3(0.32, 0.14, base_d + 1.8), Vector3(base_w * 0.5 + 0.72, -0.05, 0.0), _stone_rim_mat)
+
+	# Tiered tapering subterranean cliff underbelly (Y = -2.0 to -5.0)
+	_spawn_box(island_root, Vector3(base_w * 0.92, 2.2, base_d * 0.92), Vector3(0.0, -2.1, 0.0), _stone_dark_mat)
+	_spawn_box(island_root, Vector3(base_w * 0.75, 2.6, base_d * 0.75), Vector3(0.0, -3.8, 0.0), _stone_dark_mat)
+	_spawn_box(island_root, Vector3(base_w * 0.52, 2.2, base_d * 0.52), Vector3(0.0, -5.4, 0.0), _stone_dark_mat)
 
 	var cells_a_coords: Array[Vector2i] = []
 	var cells_b_coords: Array[Vector2i] = []
@@ -225,7 +274,8 @@ func _build_floor_multimesh(server: MatchServer, tile: float) -> void:
 			continue
 		var wxz: Vector2 = server.cell_to_world_xz(cell)
 		var hash_v: int = abs((cell.x * 73856093) ^ (cell.y * 19349663))
-		var y_off: float = -0.06 + float(hash_v % 5) * 0.018
+		# Physical slab height variation with visible stepped joints
+		var y_off: float = -0.05 + float(hash_v % 6) * 0.016
 		var yaw: float = float(hash_v % 4) * (PI * 0.5)
 		var basis := Basis.from_euler(Vector3(0.0, yaw, 0.0))
 		var xform := Transform3D(basis, Vector3(wxz.x, y_off, wxz.y))
@@ -236,13 +286,39 @@ func _build_floor_multimesh(server: MatchServer, tile: float) -> void:
 			cells_b_coords.append(cell)
 			cells_b.append(xform)
 
-	var mm_a: MultiMesh = _add_slab_multimesh(cells_a, tile * 0.92, _stone_mat_a)
+	# MultiMesh for checkered slabs with distinct stone tones
+	var mm_a: MultiMesh = _add_slab_multimesh(cells_a, tile * 0.93, _stone_mat_a)
 	for i: int in range(cells_a_coords.size()):
 		floor_cell_map[cells_a_coords[i]] = {"mm": mm_a, "idx": i}
 
-	var mm_b: MultiMesh = _add_slab_multimesh(cells_b, tile * 0.90, _stone_mat_b)
+	var mm_b: MultiMesh = _add_slab_multimesh(cells_b, tile * 0.91, _stone_mat_b)
 	for i: int in range(cells_b_coords.size()):
 		floor_cell_map[cells_b_coords[i]] = {"mm": mm_b, "idx": i}
+
+func _build_void_clouds(server: MatchServer) -> void:
+	var clouds_root := Node3D.new()
+	clouds_root.name = "VoidCloudsDeck"
+	add_child(clouds_root)
+
+	var w: float = float(server.balance.grid_width) * server.balance.tile_size * 2.4
+	var d: float = float(server.balance.grid_depth) * server.balance.tile_size * 2.4
+
+	# Deep atmospheric cloud planes hovering in the abyss below the floating island
+	_spawn_box(clouds_root, Vector3(w, 0.4, d), Vector3(0.0, -7.5, 0.0), _cloud_mat_a)
+	_spawn_box(clouds_root, Vector3(w * 1.3, 0.5, d * 1.3), Vector3(2.0, -11.0, -2.0), _cloud_mat_b)
+	_spawn_box(clouds_root, Vector3(w * 1.6, 0.6, d * 1.6), Vector3(-3.0, -15.5, 3.0), _cloud_mat_a)
+
+	# Stylized cloud puffs around the lower edges of the floating island
+	var puff_offsets: Array[Vector3] = [
+		Vector3(-w * 0.45, -6.8, -d * 0.35),
+		Vector3(w * 0.48, -7.2, -d * 0.28),
+		Vector3(-w * 0.42, -7.0, d * 0.38),
+		Vector3(w * 0.44, -7.4, d * 0.32),
+		Vector3(0.0, -8.2, -d * 0.52),
+		Vector3(0.0, -8.2, d * 0.52),
+	]
+	for p_pos: Vector3 in puff_offsets:
+		_spawn_box(clouds_root, Vector3(8.5, 2.4, 7.5), p_pos, _cloud_mat_a, Vector3(0.0, 35.0, 0.0))
 
 func _add_slab_multimesh(transforms: Array[Transform3D], slab_size: float, mat: Material) -> MultiMesh:
 	var mmi := MultiMeshInstance3D.new()
@@ -322,21 +398,27 @@ func _build_power_pedestal(pos: Vector3) -> void:
 	ped.add_child(cyl_gold)
 
 	power_cube_node = Node3D.new()
-	power_cube_node.position = Vector3(0.0, 1.45, 0.0)
+	power_cube_node.position = Vector3(0.0, 1.85, 0.0)
 	ped.add_child(power_cube_node)
-	_spawn_box(power_cube_node, Vector3(1.38, 1.38, 1.38), Vector3.ZERO, _gold_glow_mat)
-	_build_question_mark(power_cube_node, Vector3(0.0, 0.0, 0.72), 0.82, _white_glow_mat)
+	_spawn_box(power_cube_node, Vector3(1.32, 1.32, 1.32), Vector3.ZERO, _gold_glow_mat)
+	# Question mark on all 4 vertical faces of the spinning power cube
+	_build_question_mark(power_cube_node, Vector3(0.0, 0.0, 0.68), 0.78, _white_glow_mat, Vector3.ZERO)
+	_build_question_mark(power_cube_node, Vector3(0.0, 0.0, -0.68), 0.78, _white_glow_mat, Vector3(0.0, 180.0, 0.0))
+	_build_question_mark(power_cube_node, Vector3(0.68, 0.0, 0.0), 0.78, _white_glow_mat, Vector3(0.0, 90.0, 0.0))
+	_build_question_mark(power_cube_node, Vector3(-0.68, 0.0, 0.0), 0.78, _white_glow_mat, Vector3(0.0, -90.0, 0.0))
 
 	var beam_mat := ShaderMaterial.new()
 	beam_mat.shader = BEAM_SHADER
 	var beam_mi := MeshInstance3D.new()
 	var beam_cyl := CylinderMesh.new()
-	beam_cyl.top_radius = 0.72
-	beam_cyl.bottom_radius = 0.95
-	beam_cyl.height = 18.0
-	beam_cyl.radial_segments = 12
+	beam_cyl.top_radius = 1.15
+	beam_cyl.bottom_radius = 1.45
+	beam_cyl.height = 36.0
+	beam_cyl.radial_segments = 16
+	beam_cyl.cap_top = false
+	beam_cyl.cap_bottom = false
 	beam_mi.mesh = beam_cyl
-	beam_mi.position = Vector3(0.0, 9.5, 0.0)
+	beam_mi.position = Vector3(0.0, 18.0, 0.0)
 	beam_mi.material_override = beam_mat
 	ped.add_child(beam_mi)
 
@@ -347,9 +429,10 @@ func _build_power_pedestal(pos: Vector3) -> void:
 	omni.position = Vector3(0.0, 2.4, 0.0)
 	ped.add_child(omni)
 
-func _build_question_mark(parent: Node3D, offset: Vector3, scale_f: float, mat: Material) -> void:
+func _build_question_mark(parent: Node3D, offset: Vector3, scale_f: float, mat: Material, rot_deg: Vector3 = Vector3.ZERO) -> void:
 	var q := Node3D.new()
 	q.position = offset
+	q.rotation_degrees = rot_deg
 	q.scale = Vector3.ONE * scale_f
 	parent.add_child(q)
 	_spawn_box(q, Vector3(0.52, 0.16, 0.08), Vector3(0.0, 0.38, 0.0), mat)
@@ -367,43 +450,37 @@ func _build_background_ruins_and_cliffs(server: MatchServer, is_static_preview: 
 	ruin_mat.albedo_color = _stone_mat_a.albedo_color
 	ruin_mat.roughness = 0.85
 
-	if is_static_preview:
-		_spawn_box(ruins, Vector3(11.0, 2.4, 2.0), Vector3(0.5, 0.8, -14.5), ruin_mat)
-		_spawn_box(ruins, Vector3(2.8, 3.8, 2.2), Vector3(-5.2, 1.5, -14.2), ruin_mat)
-		_spawn_box(ruins, Vector3(3.0, 3.6, 2.2), Vector3(5.6, 1.4, -14.0), ruin_mat)
-		_spawn_box(ruins, Vector3(2.4, 1.6, 2.2), Vector3(-8.2, 5.2, -16.0), ruin_mat, Vector3(6.0, 18.0, -8.0))
-		_spawn_box(ruins, Vector3(2.0, 1.4, 2.0), Vector3(8.4, 5.6, -15.5), ruin_mat, Vector3(-5.0, -15.0, 10.0))
-		_spawn_box(ruins, Vector3(0.95, 0.95, 0.95), Vector3(6.8, 4.2, -7.5), _stone_dark_mat, Vector3(22.0, 35.0, -18.0))
+	var banner_bg := StandardMaterial3D.new()
+	banner_bg.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	banner_bg.albedo_color = Color(0.86, 0.34, 0.92)
+	var banner_border := StandardMaterial3D.new()
+	banner_border.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	banner_border.albedo_color = Color(1.0, 0.72, 0.98)
 
-		var banner_bg := StandardMaterial3D.new()
-		banner_bg.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		banner_bg.albedo_color = Color(0.86, 0.34, 0.92)
-		var banner_border := StandardMaterial3D.new()
-		banner_border.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		banner_border.albedo_color = Color(1.0, 0.72, 0.98)
+	var safe_b: Vector2 = server.get_safe_bounds_xz()
+	var north_z: float = -safe_b.y - 2.8
 
-		var banner := Node3D.new()
-		banner.position = Vector3(-0.8, 2.4, -13.2)
-		ruins.add_child(banner)
-		_spawn_box(banner, Vector3(2.8, 1.8, 0.2), Vector3.ZERO, banner_bg)
-		_spawn_box(banner, Vector3(1.4, 0.30, 0.26), Vector3(0.0, -0.30, 0.05), banner_border)
-		_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(-0.56, 0.06, 0.05), banner_border)
-		_spawn_box(banner, Vector3(0.28, 0.65, 0.26), Vector3(0.0, 0.12, 0.05), banner_border)
-		_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(0.56, 0.06, 0.05), banner_border)
+	# North ruins & ruined monolithic pillars
+	_spawn_box(ruins, Vector3(safe_b.x * 2.2, 3.2, 2.4), Vector3(0.0, 1.2, north_z), ruin_mat)
+	_spawn_box(ruins, Vector3(3.4, 5.8, 3.2), Vector3(-safe_b.x * 0.65, 2.6, north_z + 0.4), ruin_mat)
+	_spawn_box(ruins, Vector3(3.4, 5.8, 3.2), Vector3(safe_b.x * 0.65, 2.6, north_z + 0.4), ruin_mat)
+	_spawn_box(ruins, Vector3(2.4, 1.8, 2.2), Vector3(-safe_b.x * 0.85, 4.8, north_z - 0.8), ruin_mat, Vector3(6.0, 18.0, -8.0))
+	_spawn_box(ruins, Vector3(2.0, 1.6, 2.0), Vector3(safe_b.x * 0.85, 5.2, north_z - 0.8), ruin_mat, Vector3(-5.0, -15.0, 10.0))
 
-		_spawn_box(ruins, Vector3(2.6, 2.2, 16.0), Vector3(-9.8, -0.2, -2.0), _stone_dark_mat)
-		_spawn_box(ruins, Vector3(2.6, 2.2, 16.0), Vector3(9.8, -0.2, -2.0), _stone_dark_mat)
-	else:
-		var safe_b: Vector2 = server.get_safe_bounds_xz()
-		var north_z: float = -safe_b.y - 2.5
-		_spawn_box(ruins, Vector3(safe_b.x * 2.2, 3.2, 3.0), Vector3(0.0, 1.2, north_z), ruin_mat)
-		_spawn_box(ruins, Vector3(4.5, 5.5, 3.5), Vector3(-safe_b.x * 0.65, 2.4, north_z + 0.4), ruin_mat)
-		_spawn_box(ruins, Vector3(4.5, 5.5, 3.5), Vector3(safe_b.x * 0.65, 2.4, north_z + 0.4), ruin_mat)
+	# Pixel Crown Heraldic Banner in the ruins
+	var banner := Node3D.new()
+	banner.position = Vector3(0.0, 2.8, north_z + 1.2)
+	ruins.add_child(banner)
+	_spawn_box(banner, Vector3(2.8, 1.8, 0.2), Vector3.ZERO, banner_bg)
+	_spawn_box(banner, Vector3(1.4, 0.30, 0.26), Vector3(0.0, -0.30, 0.05), banner_border)
+	_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(-0.56, 0.06, 0.05), banner_border)
+	_spawn_box(banner, Vector3(0.28, 0.65, 0.26), Vector3(0.0, 0.12, 0.05), banner_border)
+	_spawn_box(banner, Vector3(0.28, 0.55, 0.26), Vector3(0.56, 0.06, 0.05), banner_border)
 
-		# Side rock boundaries
-		var side_x: float = safe_b.x + 2.5
-		_spawn_box(ruins, Vector3(3.5, 2.8, safe_b.y * 2.2), Vector3(-side_x, 0.8, 0.0), _stone_dark_mat)
-		_spawn_box(ruins, Vector3(3.5, 2.8, safe_b.y * 2.2), Vector3(side_x, 0.8, 0.0), _stone_dark_mat)
+	# East and West perimeter boundary rocks
+	var side_x: float = safe_b.x + 2.4
+	_spawn_box(ruins, Vector3(3.2, 2.8, safe_b.y * 2.2), Vector3(-side_x, 0.8, 0.0), _stone_dark_mat)
+	_spawn_box(ruins, Vector3(3.2, 2.8, safe_b.y * 2.2), Vector3(side_x, 0.8, 0.0), _stone_dark_mat)
 
 func _build_dust_and_action_accents() -> void:
 	var dust_mat := StandardMaterial3D.new()
@@ -433,7 +510,7 @@ func _init_debris_pool() -> void:
 		var bm := BoxMesh.new()
 		bm.size = Vector3(0.32, 0.32, 0.32)
 		mi.mesh = bm
-		mi.material_override = _stone_dark_mat
+		mi.material_override = _debris_mat
 		mi.visible = false
 		add_child(mi)
 		debris_pool.append(mi)

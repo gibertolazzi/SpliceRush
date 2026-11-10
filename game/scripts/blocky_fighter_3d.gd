@@ -92,7 +92,8 @@ static func _ensure_shared_materials() -> void:
 	if _shared_shadow_mat == null:
 		_shared_shadow_mat = StandardMaterial3D.new()
 		_shared_shadow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_shared_shadow_mat.albedo_color = Color(0.10, 0.06, 0.20)
+		_shared_shadow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_shared_shadow_mat.albedo_color = Color(0.04, 0.02, 0.12, 0.58)
 	if _shared_gold_mat == null:
 		_shared_gold_mat = StandardMaterial3D.new()
 		_shared_gold_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -116,7 +117,7 @@ static func _ensure_shared_materials() -> void:
 	if _shared_player_ring_mat == null:
 		_shared_player_ring_mat = StandardMaterial3D.new()
 		_shared_player_ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_shared_player_ring_mat.albedo_color = Color(0.20, 0.95, 1.0)
+		_shared_player_ring_mat.albedo_color = Color(0.76, 0.38, 1.0) # Signature Royal Purple glow
 
 func _make_unshaded_mat(col: Color) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
@@ -180,40 +181,62 @@ func _build_base_skeleton() -> void:
 	pivot.name = "Pivot"
 	add_child(pivot)
 
-	# Ground blob shadow
-	_add_box(self, Vector3(1.10, 0.02, 1.10), Vector3(0.0, 0.02, 0.0), _shared_shadow_mat)
+	# Soft circular ground shadow (replaces old clunky box shadow)
+	var shadow_mi := MeshInstance3D.new()
+	var shadow_cyl := CylinderMesh.new()
+	shadow_cyl.top_radius = 0.74
+	shadow_cyl.bottom_radius = 0.74
+	shadow_cyl.height = 0.015
+	shadow_cyl.radial_segments = 20
+	shadow_mi.mesh = shadow_cyl
+	shadow_mi.position = Vector3(0.0, 0.015, 0.0)
+	shadow_mi.material_override = _shared_shadow_mat
+	add_child(shadow_mi)
 
-	# PLAYER DISTINCT GROUND CURSOR (Unmistakable identity - only on player!)
+	# PLAYER DISTINCT GROUND CURSOR (Sleek hero-colored hollow torus ring)
 	if fighter_id == 0:
 		player_cursor_ring = Node3D.new()
 		player_cursor_ring.name = "PlayerCursorRing"
-		player_cursor_ring.position = Vector3(0.0, 0.04, 0.0)
+		player_cursor_ring.position = Vector3(0.0, 0.035, 0.0)
 		add_child(player_cursor_ring)
 
-		# Outer glowing ring
+		# Outer glowing torus ring (flat horizontal circle on the ground in signature royal purple)
 		var ring_mi := MeshInstance3D.new()
-		var ring_cyl := CylinderMesh.new()
-		ring_cyl.top_radius = 1.15
-		ring_cyl.bottom_radius = 1.25
-		ring_cyl.height = 0.03
-		ring_cyl.radial_segments = 24
-		ring_mi.mesh = ring_cyl
+		var torus := TorusMesh.new()
+		torus.inner_radius = 0.88
+		torus.outer_radius = 1.00
+		torus.rings = 24
+		torus.ring_segments = 6
+		ring_mi.mesh = torus
+		ring_mi.position = Vector3(0.0, 0.06, 0.0)
 		ring_mi.material_override = _shared_player_ring_mat
 		player_cursor_ring.add_child(ring_mi)
 
-		# Directional pointer arrow extending forward (+Z)
-		_add_box(player_cursor_ring, Vector3(0.16, 0.04, 0.55), Vector3(0.0, 0.02, 0.95), _shared_gold_mat)
-		_add_box(player_cursor_ring, Vector3(0.38, 0.04, 0.16), Vector3(0.0, 0.02, 1.15), _shared_gold_mat)
+		# Golden accent inner ring
+		var inner_gold := MeshInstance3D.new()
+		var inner_torus := TorusMesh.new()
+		inner_torus.inner_radius = 0.72
+		inner_torus.outer_radius = 0.78
+		inner_torus.rings = 20
+		inner_torus.ring_segments = 4
+		inner_gold.mesh = inner_torus
+		inner_gold.position = Vector3(0.0, 0.065, 0.0)
+		inner_gold.material_override = _shared_gold_mat
+		player_cursor_ring.add_child(inner_gold)
 
-	# Abomination Ground Aura Ring (visible to all when fighter is the Abomination)
+		# Directional pointer arrow extending forward (+Z)
+		_add_box(player_cursor_ring, Vector3(0.14, 0.03, 0.42), Vector3(0.0, 0.07, 0.92), _shared_gold_mat)
+		_add_box(player_cursor_ring, Vector3(0.32, 0.03, 0.14), Vector3(0.0, 0.07, 1.10), _shared_gold_mat)
+
+	# Abomination Ground Aura Ring (flat horizontal torus on ground)
 	abomination_ring = MeshInstance3D.new()
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = 1.35
-	cyl.bottom_radius = 1.45
-	cyl.height = 0.05
-	cyl.radial_segments = 16
-	abomination_ring.mesh = cyl
-	abomination_ring.position = Vector3(0.0, 0.06, 0.0)
+	var abom_torus := TorusMesh.new()
+	abom_torus.inner_radius = 1.25
+	abom_torus.outer_radius = 1.45
+	abom_torus.rings = 24
+	abom_torus.ring_segments = 6
+	abomination_ring.mesh = abom_torus
+	abomination_ring.position = Vector3(0.0, 0.065, 0.0)
 	abomination_ring.material_override = _shared_magenta_mat
 	abomination_ring.visible = false
 	add_child(abomination_ring)
@@ -238,8 +261,8 @@ func _build_base_skeleton() -> void:
 			if fighter_id == 0:
 				mat.albedo_color = Color.WHITE
 			else:
-				# Tint bot body with its assigned fighter palette color
-				mat.albedo_color = base_color.lightened(0.25)
+				# Tint bot body with vivid, saturated fighter palette color
+				mat.albedo_color = base_color
 			char_mesh.set_surface_override_material(0, mat)
 
 	if skeleton != null:

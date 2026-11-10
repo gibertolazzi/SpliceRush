@@ -39,6 +39,7 @@ var _preview_tutorial_dismissed: bool = false
 var _preview_customize: bool = false
 var _preview_loading: bool = false
 var _preview_one_leg: bool = false
+var _preview_last10s: bool = false
 var _skip_customize: bool = false
 var _requested_map_theme: int = -1
 var _web_first_frame_reported: bool = false
@@ -48,7 +49,7 @@ func _ready() -> void:
 	_parse_cmdline_args()
 	if _preview_customize:
 		is_customizing = true
-	elif _simulate_input_preview or _preview_frenzy or _preview_result or _preview_clip or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1:
+	elif _simulate_input_preview or _preview_frenzy or _preview_last10s or _preview_result or _preview_clip or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1:
 		is_customizing = false
 	else:
 		is_customizing = true
@@ -63,7 +64,9 @@ func _ready() -> void:
 	if _preview_loading and customization_menu != null:
 		customization_menu.is_loading = true
 		customization_menu.loading_progress = 0.65
-	if _preview_frenzy:
+	if _preview_last10s:
+		server.match_elapsed_sec = balance.match_duration_sec - 7.0
+	elif _preview_frenzy:
 		server.match_elapsed_sec = balance.frenzy_start_sec - 0.02
 	if _preview_result:
 		server.match_elapsed_sec = balance.match_duration_sec - 0.05
@@ -102,6 +105,8 @@ func _parse_cmdline_args() -> void:
 			_simulate_input_preview = true
 		elif arg == "--preview-frenzy":
 			_preview_frenzy = true
+		elif arg == "--preview-last10s":
+			_preview_last10s = true
 		elif arg == "--preview-result":
 			_preview_result = true
 		elif arg == "--preview-clip":
@@ -256,18 +261,31 @@ func _setup_server_and_world() -> void:
 
 	target_ring_mesh = MeshInstance3D.new()
 	target_ring_mesh.name = "TargetLockRing"
-	var ring_cyl := CylinderMesh.new()
-	ring_cyl.top_radius = 0.92
-	ring_cyl.bottom_radius = 0.98
-	ring_cyl.height = 0.05
-	ring_cyl.radial_segments = 16
-	target_ring_mesh.mesh = ring_cyl
+	var lock_torus := TorusMesh.new()
+	lock_torus.inner_radius = 0.84
+	lock_torus.outer_radius = 0.94
+	lock_torus.rings = 24
+	lock_torus.ring_segments = 6
+	target_ring_mesh.mesh = lock_torus
 	var ring_mat := StandardMaterial3D.new()
 	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	ring_mat.albedo_color = Color(1.0, 0.18, 0.58)
+	ring_mat.albedo_color = Color(1.0, 0.28, 0.18) # High-visibility targeting orange-red
 	target_ring_mesh.material_override = ring_mat
+	target_ring_mesh.position = Vector3(0.0, 0.07, 0.0)
 	target_ring_mesh.visible = false
 	add_child(target_ring_mesh)
+
+	# 4 sleek targeting bracket markers at 90-degree intervals
+	for b_i: int in range(4):
+		var bracket := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.08, 0.03, 0.22)
+		bracket.mesh = bm
+		bracket.material_override = ring_mat
+		var b_angle: float = float(b_i) * (PI * 0.5)
+		bracket.position = Vector3(cos(b_angle) * 0.96, 0.01, sin(b_angle) * 0.96)
+		bracket.rotation = Vector3(0.0, -b_angle, 0.0)
+		target_ring_mesh.add_child(bracket)
 
 	server.state_ticked.connect(_on_server_state_ticked)
 	server.attack_performed.connect(_on_server_attack_performed)
@@ -462,6 +480,12 @@ func _on_server_state_ticked(time_left: float) -> void:
 		hud.on_match_time_updated(time_left)
 		if not server.combatants.is_empty():
 			hud.on_stolen_parts_updated(server.combatants[0].stolen_parts_count)
+	if virtual_joystick != null and not server.combatants.is_empty():
+		var p0: MatchServer.CombatantState = server.combatants[0]
+		virtual_joystick.attack_cooldown_timer = p0.attack_cooldown
+		virtual_joystick.attack_max_cooldown = maxf(0.1, balance.auto_attack_cooldown_sec * p0.cooldown_mult)
+		virtual_joystick.dash_cooldown_timer = p0.dash_cooldown
+		virtual_joystick.dash_max_cooldown = maxf(0.1, balance.dash_cooldown_sec * p0.cooldown_mult)
 
 func _on_server_attack_performed(attacker_id: int, target_id: int, from_xz: Vector2, to_xz: Vector2, _damage: int) -> void:
 	if attacker_id == 0:

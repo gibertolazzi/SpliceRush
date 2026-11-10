@@ -40,6 +40,10 @@ var font_bold: Font = preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
 var font_regular: Font = preload("res://game/ui/fonts/LondrinaSolid-Regular.ttf")
 var logo_texture: Texture2D = preload("res://game/ui/assets/logo.svg")
 
+const ARM_SVG: Texture2D = preload("res://game/ui/assets/arm.svg")
+const LEG_SVG: Texture2D = preload("res://game/ui/assets/leg.svg")
+const CORE_SVG: Texture2D = preload("res://game/ui/assets/components.svg")
+
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -233,23 +237,33 @@ func _draw() -> void:
 			var l_col: Color = Color(1.0, 0.94, 0.48, line_alpha) if (l_i % 2 == 0) else Color(1.0, 0.22, 0.62, line_alpha)
 			draw_line(p_in, p_out, l_col, 3.6)
 
-	# 1. TOP-CENTER: Timer Panel (00:47) with Stopwatch Icon
-	var timer_rect := Rect2(Vector2(rect_size.x * 0.5 - 66.0, 14.0), Vector2(132.0, 42.0))
-	_draw_chamfer_panel(timer_rect, navy_bg, magenta if is_frenzy else border_col, 6.0)
-	var clock_c := timer_rect.position + Vector2(26.0, 22.0)
-	draw_arc(clock_c, 10.5, 0.0, TAU, 24, white, 2.4)
-	draw_line(clock_c + Vector2(0.0, -10.5), clock_c + Vector2(0.0, -14.5), white, 2.5)
-	draw_line(clock_c + Vector2(-4.0, -14.5), clock_c + Vector2(4.0, -14.5), white, 2.5)
-	draw_line(clock_c, clock_c + Vector2(4.5, -4.5), white, 2.2)
-
+	# 1. TOP-CENTER: Timer Panel with Stopwatch Icon (Larger + Urgent pulse in last 10s)
 	var total_sec: int = maxi(0, int(ceil(time_remaining_sec)))
+	var is_last_10s: bool = (total_sec <= 10 and not show_result_overlay)
+	var pulse_scale: float = (1.0 + 0.08 * sin(float(Time.get_ticks_msec()) * 0.015)) if is_last_10s else 1.0
+	var timer_w: float = 154.0 * pulse_scale
+	var timer_h: float = 48.0 * pulse_scale
+	var timer_rect := Rect2(Vector2(rect_size.x * 0.5 - timer_w * 0.5, 14.0), Vector2(timer_w, timer_h))
+	var timer_border_col: Color = Color(1.0, 0.20, 0.35) if is_last_10s else (magenta if is_frenzy else border_col)
+	_draw_chamfer_panel(timer_rect, navy_bg, timer_border_col, 6.0)
+
+	var clock_c := timer_rect.position + Vector2(28.0 * pulse_scale, timer_h * 0.5)
+	draw_arc(clock_c, 11.5 * pulse_scale, 0.0, TAU, 24, white, 2.4)
+	draw_line(clock_c + Vector2(0.0, -11.5 * pulse_scale), clock_c + Vector2(0.0, -16.0 * pulse_scale), white, 2.5)
+	draw_line(clock_c + Vector2(-4.0, -16.0 * pulse_scale), clock_c + Vector2(4.0, -16.0 * pulse_scale), white, 2.5)
+	draw_line(clock_c, clock_c + Vector2(5.0 * pulse_scale, -5.0 * pulse_scale), white, 2.2)
+
 	var mins: int = total_sec / 60
 	var secs: int = total_sec % 60
 	var timer_str: String = tr(&"HUD_TIMER_FORMAT") % [mins, secs]
-	draw_string(font_bold, timer_rect.position + Vector2(44.0, 31.0), timer_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 26, gold if is_frenzy else white)
+	var timer_text_col: Color = Color(1.0, 0.30, 0.40) if is_last_10s else (gold if is_frenzy else white)
+	var timer_fsize: int = int(round(30.0 * pulse_scale))
+	draw_string(font_bold, timer_rect.position + Vector2(48.0 * pulse_scale, timer_h * 0.5 + 10.0 * pulse_scale), timer_str, HORIZONTAL_ALIGNMENT_LEFT, -1, timer_fsize, timer_text_col)
 
-	# 2. TOP-RIGHT: 4-Slot Panel + Stolen Parts Counter (Decision #1: 4 slots + stolen counter, no fixed threshold)
-	var slots_rect := Rect2(Vector2(rect_size.x - 156.0, 14.0), Vector2(144.0, 62.0))
+	# 2. TOP-RIGHT: 4-Slot Panel with Vector SVGs & Stolen Parts Counter (Translucent empty / Opaque upgraded)
+	var slots_w: float = 168.0
+	var slots_h: float = 68.0
+	var slots_rect := Rect2(Vector2(rect_size.x - slots_w - 12.0, 14.0), Vector2(slots_w, slots_h))
 	_draw_chamfer_panel(slots_rect, navy_bg, gold if is_abomination else border_col, 7.0)
 	var display_slot_order: Array[PartData.Slot] = [
 		PartData.Slot.ARMS,
@@ -257,32 +271,35 @@ func _draw() -> void:
 		PartData.Slot.HEAD,
 		PartData.Slot.CORE,
 	]
+	var box_sz: float = 34.0
 	for s_idx: int in range(4):
 		var slot_enum: PartData.Slot = display_slot_order[s_idx]
 		var pid: StringName = equipped_slots.get(slot_enum, PartCatalog.get_base_part_for_slot(slot_enum)) as StringName
 		var pdata: PartData = PartCatalog.get_part(pid)
+		var is_upgraded: bool = (pid != PartCatalog.get_base_part_for_slot(slot_enum))
 		var r_col: Color = PartCatalog.get_rarity_color(pdata.rarity)
-		var sx: float = slots_rect.position.x + 12.0 + float(s_idx) * 32.0
-		var sy: float = slots_rect.position.y + 8.0
-		var box_r := Rect2(Vector2(sx, sy), Vector2(26.0, 26.0))
-		draw_rect(box_r, Color(0.14, 0.12, 0.30, 0.95), true)
-		draw_rect(box_r, r_col, false, 2.0)
-		_draw_slot_mini_icon(s_idx, box_r.get_center(), r_col)
+		var sx: float = slots_rect.position.x + 8.0 + float(s_idx) * 38.0
+		var sy: float = slots_rect.position.y + 7.0
+		var box_r := Rect2(Vector2(sx, sy), Vector2(box_sz, box_sz))
+
+		# Transparency: muted when empty / basic, full bright opacity when holding upgraded part
+		var fill_alpha: float = 0.95 if is_upgraded else 0.40
+		var icon_alpha: float = 1.0 if is_upgraded else 0.32
+		draw_rect(box_r, Color(0.12, 0.10, 0.26, fill_alpha), true)
+		draw_rect(box_r, Color(r_col.r, r_col.g, r_col.b, fill_alpha), false, 2.0 if is_upgraded else 1.2)
+
+		_draw_slot_svg_icon(s_idx, box_r, icon_alpha, r_col)
+
 		if colorblind_mode_enabled:
 			var pip_count: int = int(pdata.rarity) + 1
 			for p_i: int in range(pip_count):
-				var px: float = box_r.position.x + 3.0 + float(p_i) * 5.5
-				draw_rect(Rect2(Vector2(px, box_r.end.y - 3.5), Vector2(3.5, 2.5)), white, true)
+				var px: float = box_r.position.x + 3.0 + float(p_i) * 6.5
+				draw_rect(Rect2(Vector2(px, box_r.end.y - 4.0), Vector2(4.5, 3.0)), white, true)
 
 	var counter_str: String = tr(&"HUD_STOLEN_COUNTER") % [stolen_parts_count]
-	draw_string(font_bold, slots_rect.position + Vector2(56.0, 55.0), counter_str, HORIZONTAL_ALIGNMENT_CENTER, 32.0, 18, white)
+	draw_string(font_bold, slots_rect.position + Vector2(24.0, 61.0), counter_str, HORIZONTAL_ALIGNMENT_CENTER, slots_w - 48.0, 16, white)
 
-	# 3. TOP-LEFT: Official Vector SPLICE RUSH Logo
-	if logo_texture != null:
-		var logo_w: float = 162.0
-		var logo_h: float = logo_w * (300.0 / 401.0)
-		var logo_rect := Rect2(Vector2(8.0, 8.0), Vector2(logo_w, logo_h))
-		draw_texture_rect(logo_texture, logo_rect, false)
+	# 3. TOP-LEFT: Clean field in match (Logo is reserved for menu to keep HUD uncluttered)
 
 	# Frenzy Phase Banner or Part-Stolen Toast below timer
 	if is_frenzy and not show_result_overlay:
@@ -530,6 +547,39 @@ func _draw_crown(center: Vector2, half_w: float, col: Color) -> void:
 	])
 	draw_colored_polygon(pts, col)
 
+func _draw_slot_svg_icon(slot_idx: int, box_r: Rect2, alpha: float, col: Color) -> void:
+	match slot_idx:
+		0: # ARMS (Vector SVG)
+			if ARM_SVG != null:
+				var icon_sz := Vector2(18.0, 25.0)
+				var icon_pos := box_r.position + (box_r.size - icon_sz) * 0.5
+				draw_texture_rect(ARM_SVG, Rect2(icon_pos, icon_sz), false, Color(1.0, 1.0, 1.0, alpha))
+			else:
+				var c := box_r.get_center()
+				draw_rect(Rect2(c + Vector2(-8.0, -7.0), Vector2(16.0, 14.0)), Color(col.r, col.g, col.b, alpha), true)
+		1: # LEGS (Vector SVG)
+			if LEG_SVG != null:
+				var icon_sz := Vector2(16.0, 26.0)
+				var icon_pos := box_r.position + (box_r.size - icon_sz) * 0.5
+				draw_texture_rect(LEG_SVG, Rect2(icon_pos, icon_sz), false, Color(1.0, 1.0, 1.0, alpha))
+			else:
+				var c := box_r.get_center()
+				draw_rect(Rect2(c + Vector2(-6.0, -9.0), Vector2(12.0, 18.0)), Color(col.r, col.g, col.b, alpha), true)
+		2: # HEAD (Visor Helmet Icon)
+			var c := box_r.get_center()
+			draw_rect(Rect2(c + Vector2(-10.0, -10.0), Vector2(20.0, 20.0)), Color(col.r, col.g, col.b, alpha), true)
+			draw_rect(Rect2(c + Vector2(-7.0, -3.0), Vector2(14.0, 6.0)), Color(1.0, 1.0, 1.0, alpha * 0.95), true)
+			draw_rect(Rect2(c + Vector2(-3.0, 4.0), Vector2(6.0, 2.5)), Color(0.12, 0.08, 0.22, alpha), true)
+		3: # CORE / Components (Vector SVG)
+			if CORE_SVG != null:
+				var icon_sz := Vector2(13.0, 26.0)
+				var icon_pos := box_r.position + (box_r.size - icon_sz) * 0.5
+				draw_texture_rect(CORE_SVG, Rect2(icon_pos, icon_sz), false, Color(1.0, 1.0, 1.0, alpha))
+			else:
+				var c := box_r.get_center()
+				draw_circle(c, 8.5, Color(col.r, col.g, col.b, alpha))
+				draw_circle(c, 3.5, Color(0.08, 0.08, 0.20, alpha))
+
 func _draw_slot_mini_icon(slot_idx: int, c: Vector2, col: Color) -> void:
 	var white := Color(0.98, 0.98, 1.0)
 	match slot_idx:
@@ -552,7 +602,6 @@ func _draw_overhead_combatants() -> void:
 	var magenta := Color(1.0, 0.18, 0.576, 1.0)
 	var player_green := Color(0.22, 0.96, 0.38, 1.0)
 	var bot_red := Color(0.96, 0.32, 0.24, 1.0)
-	var you_text: String = tr(&"HUD_YOU_BADGE")
 	var bot_text: String = tr(&"HUD_BOT_BADGE")
 
 	for item: Dictionary in overhead_combatant_data:
@@ -562,29 +611,22 @@ func _draw_overhead_combatants() -> void:
 		var ratio: float = float(item["hp_ratio"])
 
 		if is_p:
-			# PLAYER BADGE: Prominent gold badge with "TU" and bright green health bar
-			var badge_w: float = 46.0
-			var badge_h: float = 20.0
-			var badge_rect := Rect2(p + Vector2(-badge_w * 0.5, -34.0), Vector2(badge_w, badge_h))
-			_draw_chamfer_panel(badge_rect, Color(0.12, 0.05, 0.28, 0.95), gold, 4.0)
+			# PLAYER BADGE: Sleek floating crown & chevron pointer (Eliminated clunky debug "TU" badge!)
+			var float_y: float = sin(float(Time.get_ticks_msec()) * 0.007) * 2.5
+			_draw_crown(p + Vector2(0.0, -36.0 + float_y), 11.0, gold)
 
-			# Downward arrow pointing directly at player's head
+			# Downward gold pointer chevron directly above player
 			var arrow_pts := PackedVector2Array([
-				p + Vector2(-6.0, -13.0),
-				p + Vector2(6.0, -13.0),
-				p + Vector2(0.0, -6.0),
+				p + Vector2(-5.0, -20.0 + float_y),
+				p + Vector2(5.0, -20.0 + float_y),
+				p + Vector2(0.0, -14.0 + float_y),
 			])
 			draw_colored_polygon(arrow_pts, gold)
 
-			if is_abom:
-				_draw_crown(p + Vector2(0.0, -42.0), 12.0, gold)
-
-			draw_string(font_bold, badge_rect.position + Vector2(4.0, 15.0), you_text, HORIZONTAL_ALIGNMENT_CENTER, badge_w - 8.0, 14, gold)
-
 			# Health bar
 			var bar_w: float = 54.0
-			var bar_h: float = 7.0
-			var bar_rect := Rect2(p + Vector2(-bar_w * 0.5, -12.0), Vector2(bar_w, bar_h))
+			var bar_h: float = 6.0
+			var bar_rect := Rect2(p + Vector2(-bar_w * 0.5, -7.0), Vector2(bar_w, bar_h))
 			draw_rect(bar_rect, navy_bg, true)
 			draw_rect(bar_rect, gold, false, 1.2)
 			var fill_col: Color = player_green if ratio > 0.35 else Color(1.0, 0.35, 0.2)
