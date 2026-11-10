@@ -17,6 +17,7 @@ func _initialize() -> void:
 		"test_bot_utility_ai_decisions",
 		"test_90s_match_frenzy_collapse_result_and_rematch",
 		"test_3s_viral_clip_and_game_feel",
+		"test_logo_and_londrina_font_resources",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -325,4 +326,23 @@ func test_3s_viral_clip_and_game_feel() -> bool:
 
 	sc.free()
 	srv.free()
+	return true
+
+func test_logo_and_londrina_font_resources() -> bool:
+	var f_bold: Font = load("res://game/ui/fonts/LondrinaSolid-Black.ttf")
+	var f_regular: Font = load("res://game/ui/fonts/LondrinaSolid-Regular.ttf")
+	var l_tex: Texture2D = load("res://game/ui/assets/logo.svg")
+	assert_true(f_bold != null, "londrina_solid_black_font_loaded")
+	assert_true(f_regular != null, "londrina_solid_regular_font_loaded")
+	assert_true(l_tex != null, "splice_rush_vector_logo_loaded")
+	if l_tex != null:
+		assert_true(l_tex.get_width() > 0, "logo_texture_has_valid_width")
+		assert_true(l_tex.get_height() > 0, "logo_texture_has_valid_height")
+
+	var hud := VerticalHUD.new()
+	root.add_child(hud)
+	assert_true(hud.font_bold != null, "hud_has_font_bold")
+	assert_true(hud.font_regular != null, "hud_has_font_regular")
+	assert_true(hud.logo_texture != null, "hud_has_logo_texture")
+	hud.free()
 	return true

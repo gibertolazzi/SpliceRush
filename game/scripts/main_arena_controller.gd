@@ -26,6 +26,7 @@ var _screenshot_path: String = ""
 var _target_screenshot_frame: int = 15
 var _simulate_input_preview: bool = false
 var _preview_frenzy: bool = false
+var _preview_result: bool = false
 var _preview_clip: bool = false
 var _web_first_frame_reported: bool = false
 var _web_first_input_reported: bool = false
@@ -39,6 +40,8 @@ func _ready() -> void:
 	_setup_ui()
 	if _preview_frenzy:
 		server.match_elapsed_sec = balance.frenzy_start_sec - 0.02
+	if _preview_result:
+		server.match_elapsed_sec = balance.match_duration_sec - 0.05
 	if _preview_clip:
 		_stage_viral_clip_moment()
 	if _simulate_input_preview and virtual_joystick != null:
@@ -57,6 +60,8 @@ func _parse_cmdline_args() -> void:
 			_simulate_input_preview = true
 		elif arg == "--preview-frenzy":
 			_preview_frenzy = true
+		elif arg == "--preview-result":
+			_preview_result = true
 		elif arg == "--preview-clip":
 			_preview_clip = true
 

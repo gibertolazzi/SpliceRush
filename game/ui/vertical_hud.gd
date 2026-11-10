@@ -3,22 +3,22 @@ extends Control
 
 signal rematch_requested()
 
-var time_remaining_sec: float = 47.0
-var stolen_parts_count: int = 4
-var is_abomination: bool = true
+var time_remaining_sec: float = 90.0
+var stolen_parts_count: int = 0
+var is_abomination: bool = false
 var is_frenzy: bool = false
 var show_result_overlay: bool = false
 var player_rank: int = 1
 var result_countdown_sec: float = 5.0
 var leaderboard_entries: Array[Dictionary] = []
-var total_mass: int = 241
+var total_mass: int = 100
 var screen_shake_enabled: bool = true
 var colorblind_mode_enabled: bool = true
 var equipped_slots: Dictionary = {
-	PartData.Slot.HEAD: &"laser_eye",
-	PartData.Slot.ARMS: &"chainsaw_arm",
-	PartData.Slot.LEGS: &"rocket_legs",
-	PartData.Slot.CORE: &"crown_core",
+	PartData.Slot.HEAD: &"base_head",
+	PartData.Slot.ARMS: &"base_fist",
+	PartData.Slot.LEGS: &"base_boots",
+	PartData.Slot.CORE: &"base_core",
 }
 
 var _toast_text: String = ""
@@ -26,6 +26,11 @@ var _toast_timer: float = 0.0
 var _flash_timer: float = 0.0
 var _speed_lines_timer: float = 0.0
 var _rematch_btn_rect := Rect2(Vector2(110.0, 560.0), Vector2(320.0, 58.0))
+var overhead_combatant_data: Array[Dictionary] = []
+
+var font_bold: Font = preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
+var font_regular: Font = preload("res://game/ui/fonts/LondrinaSolid-Regular.ttf")
+var logo_texture: Texture2D = preload("res://game/ui/assets/logo.svg")
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -124,8 +129,41 @@ func trigger_impact_speed_lines(duration_sec: float = 0.28) -> void:
 	_speed_lines_timer = maxf(_speed_lines_timer, duration_sec)
 	queue_redraw()
 
+func update_overhead_combatants(combatants: Array, cam: Camera3D) -> void:
+	overhead_combatant_data.clear()
+	if cam == null:
+		queue_redraw()
+		return
+
+	var vp_size: Vector2 = get_viewport_rect().size
+	if vp_size.x <= 10.0:
+		vp_size = size
+
+	for c: MatchServer.CombatantState in combatants:
+		if not c.alive:
+			continue
+		var head_y: float = 2.25 if c.is_abomination else 1.70
+		var world_pos := Vector3(c.pos.x, head_y, c.pos.y)
+		if cam.is_position_behind(world_pos):
+			continue
+		var s_pos: Vector2 = cam.unproject_position(world_pos)
+		if s_pos.x < -80.0 or s_pos.x > vp_size.x + 80.0 or s_pos.y < -80.0 or s_pos.y > vp_size.y + 80.0:
+			continue
+
+		var max_h: float = maxf(1.0, float(c.max_hp))
+		var ratio: float = clampf(float(c.hp) / max_h, 0.0, 1.0)
+		overhead_combatant_data.append({
+			"screen_pos": s_pos,
+			"is_player": (c.id == 0),
+			"is_bot": c.is_bot,
+			"is_abomination": c.is_abomination,
+			"hp_ratio": ratio,
+			"base_color": c.base_color,
+			"id": c.id,
+		})
+	queue_redraw()
+
 func _draw() -> void:
-	var font: Font = ThemeDB.fallback_font
 	var rect_size: Vector2 = size
 	if rect_size.x < 10.0:
 		rect_size = Vector2(540.0, 960.0)
@@ -135,6 +173,9 @@ func _draw() -> void:
 	var magenta := Color(1.0, 0.18, 0.576, 1.0)
 	var gold := Color(1.0, 0.76, 0.12, 1.0)
 	var white := Color(0.98, 0.98, 1.0, 1.0)
+
+	# Overhead character tags & health bars (Readability & Comprehensibility)
+	_draw_overhead_combatants()
 
 	# 0. ACTION SPEED LINES & STEAL TRANSFORMATION FLASH (Passo 4 Game Feel)
 	if _flash_timer > 0.0:
@@ -164,7 +205,7 @@ func _draw() -> void:
 	var mins: int = total_sec / 60
 	var secs: int = total_sec % 60
 	var timer_str: String = tr(&"HUD_TIMER_FORMAT") % [mins, secs]
-	draw_string(font, timer_rect.position + Vector2(45.0, 30.0), timer_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 24, gold if is_frenzy else white)
+	draw_string(font_bold, timer_rect.position + Vector2(44.0, 31.0), timer_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 26, gold if is_frenzy else white)
 
 	# 2. TOP-RIGHT: 4-Slot Panel + Stolen Parts Counter (Decision #1: 4 slots + stolen counter, no fixed threshold)
 	var slots_rect := Rect2(Vector2(rect_size.x - 156.0, 14.0), Vector2(144.0, 62.0))
@@ -193,31 +234,24 @@ func _draw() -> void:
 				draw_rect(Rect2(Vector2(px, box_r.end.y - 3.5), Vector2(3.5, 2.5)), white, true)
 
 	var counter_str: String = tr(&"HUD_STOLEN_COUNTER") % [stolen_parts_count]
-	draw_string(font, slots_rect.position + Vector2(62.0, 54.0), counter_str, HORIZONTAL_ALIGNMENT_CENTER, 32.0, 16, white)
+	draw_string(font_bold, slots_rect.position + Vector2(56.0, 55.0), counter_str, HORIZONTAL_ALIGNMENT_CENTER, 32.0, 18, white)
 
-	# 3. TOP-LEFT: Stylized SPLICE RUSH Logo with Golden Crown
-	var logo_origin := Vector2(14.0, 18.0)
-	var logo_bg_pts := PackedVector2Array([
-		logo_origin + Vector2(0.0, 14.0),
-		logo_origin + Vector2(146.0, 2.0),
-		logo_origin + Vector2(138.0, 78.0),
-		logo_origin + Vector2(6.0, 92.0),
-	])
-	draw_colored_polygon(logo_bg_pts, Color(0.05, 0.04, 0.14, 0.96))
-	draw_polyline(logo_bg_pts, magenta, 2.5)
-	_draw_crown(logo_origin + Vector2(56.0, 6.0), 16.0, gold)
-	draw_string(font, logo_origin + Vector2(14.0, 42.0), tr(&"GAME_TITLE_TOP"), HORIZONTAL_ALIGNMENT_LEFT, -1, 28, white)
-	draw_string(font, logo_origin + Vector2(22.0, 74.0), tr(&"GAME_TITLE_BOTTOM"), HORIZONTAL_ALIGNMENT_LEFT, -1, 30, magenta)
+	# 3. TOP-LEFT: Official Vector SPLICE RUSH Logo
+	if logo_texture != null:
+		var logo_w: float = 162.0
+		var logo_h: float = logo_w * (300.0 / 401.0)
+		var logo_rect := Rect2(Vector2(8.0, 8.0), Vector2(logo_w, logo_h))
+		draw_texture_rect(logo_texture, logo_rect, false)
 
 	# Frenzy Phase Banner or Part-Stolen Toast below timer
 	if is_frenzy and not show_result_overlay:
 		var f_rect := Rect2(Vector2(rect_size.x * 0.5 - 126.0, 62.0), Vector2(252.0, 28.0))
 		_draw_chamfer_panel(f_rect, Color(0.24, 0.04, 0.16, 0.95), magenta, 5.0)
-		draw_string(font, f_rect.position + Vector2(10.0, 19.0), tr(&"HUD_FRENZY_BANNER"), HORIZONTAL_ALIGNMENT_CENTER, 232.0, 13, gold)
+		draw_string(font_bold, f_rect.position + Vector2(10.0, 20.0), tr(&"HUD_FRENZY_BANNER"), HORIZONTAL_ALIGNMENT_CENTER, 232.0, 14, gold)
 	elif _toast_timer > 0.0 and _toast_text != "":
 		var toast_rect := Rect2(Vector2(rect_size.x - 196.0, 82.0), Vector2(184.0, 28.0))
 		_draw_chamfer_panel(toast_rect, Color(0.10, 0.06, 0.24, 0.96), gold, 5.0)
-		draw_string(font, toast_rect.position + Vector2(8.0, 19.0), _toast_text, HORIZONTAL_ALIGNMENT_CENTER, 168.0, 14, gold)
+		draw_string(font_bold, toast_rect.position + Vector2(8.0, 20.0), _toast_text, HORIZONTAL_ALIGNMENT_CENTER, 168.0, 15, gold)
 
 	# 4. BOTTOM-LEFT: Tutorial Callout ("RUBA I PEZZI!" + 4-Slot Body Diagram)
 	var callout_pos := Vector2(12.0, rect_size.y - 304.0)
@@ -230,9 +264,9 @@ func _draw() -> void:
 	draw_colored_polygon(header_pts, Color(0.06, 0.06, 0.14, 0.96))
 	var steal_lines: PackedStringArray = tr(&"HUD_STEAL_PARTS").split("\n")
 	if steal_lines.size() > 0:
-		draw_string(font, callout_pos + Vector2(12.0, 21.0), steal_lines[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, white)
+		draw_string(font_bold, callout_pos + Vector2(12.0, 21.0), steal_lines[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, white)
 	if steal_lines.size() > 1:
-		draw_string(font, callout_pos + Vector2(12.0, 37.0), steal_lines[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, gold)
+		draw_string(font_bold, callout_pos + Vector2(12.0, 37.0), steal_lines[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, gold)
 
 	var diag_rect := Rect2(callout_pos + Vector2(2.0, 50.0), Vector2(114.0, 128.0))
 	_draw_chamfer_panel(diag_rect, navy_bg, border_col, 6.0)
@@ -267,9 +301,9 @@ func _draw() -> void:
 	_draw_crown(abom_origin + Vector2(132.0, 0.0), 18.0, gold)
 	var abom_lines: PackedStringArray = tr(&"HUD_BECOME_ABOMINATION").split("\n")
 	if abom_lines.size() > 0:
-		draw_string(font, abom_origin + Vector2(36.0, 42.0), abom_lines[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 17, white)
+		draw_string(font_bold, abom_origin + Vector2(36.0, 42.0), abom_lines[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 19, white)
 	if abom_lines.size() > 1:
-		draw_string(font, abom_origin + Vector2(18.0, 68.0), abom_lines[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 20, gold)
+		draw_string(font_bold, abom_origin + Vector2(18.0, 70.0), abom_lines[1], HORIZONTAL_ALIGNMENT_LEFT, -1, 23, gold)
 
 	# 6. 5-SECOND RESULT OVERLAY & 1-TAP REMATCH BUTTON (Passo 3)
 	if show_result_overlay:
@@ -279,10 +313,10 @@ func _draw() -> void:
 		_draw_crown(Vector2(rect_size.x * 0.5, card_rect.position.y + 28.0), 22.0, gold)
 
 		var title_str: String = tr(&"HUD_RESULT_TITLE_WIN") if player_rank == 1 else (tr(&"HUD_RESULT_TITLE_RANK") % [player_rank])
-		draw_string(font, Vector2(card_rect.position.x + 20.0, card_rect.position.y + 72.0), title_str, HORIZONTAL_ALIGNMENT_CENTER, 380.0, 24, gold if player_rank == 1 else white)
+		draw_string(font_bold, Vector2(card_rect.position.x + 20.0, card_rect.position.y + 72.0), title_str, HORIZONTAL_ALIGNMENT_CENTER, 380.0, 28, gold if player_rank == 1 else white)
 
 		var score_str: String = tr(&"HUD_RESULT_MASS_SCORE") % [total_mass, stolen_parts_count]
-		draw_string(font, Vector2(card_rect.position.x + 20.0, card_rect.position.y + 104.0), score_str, HORIZONTAL_ALIGNMENT_CENTER, 380.0, 15, Color(0.88, 0.86, 0.98))
+		draw_string(font_regular, Vector2(card_rect.position.x + 20.0, card_rect.position.y + 104.0), score_str, HORIZONTAL_ALIGNMENT_CENTER, 380.0, 16, Color(0.88, 0.86, 0.98))
 
 		var max_rows: int = mini(4, leaderboard_entries.size())
 		for r_i: int in range(max_rows):
@@ -294,11 +328,11 @@ func _draw() -> void:
 			draw_rect(row_rect, gold if is_player_row else border_col, false, 1.5)
 			var badge_str: String = tr(&"HUD_YOU_BADGE") if not bool(entry["is_bot"]) else tr(&"HUD_BOT_BADGE")
 			var row_label: String = "#%d  [%s] #%d   —   %d" % [r_i + 1, badge_str, int(entry["id"]) + 1, int(entry["total_mass"])]
-			draw_string(font, row_rect.position + Vector2(14.0, 25.0), row_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, gold if is_player_row else white)
+			draw_string(font_regular, row_rect.position + Vector2(14.0, 26.0), row_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, gold if is_player_row else white)
 
 		_rematch_btn_rect = Rect2(Vector2(rect_size.x * 0.5 - 165.0, card_rect.end.y - 92.0), Vector2(330.0, 58.0))
 		_draw_chamfer_panel(_rematch_btn_rect, magenta, gold, 8.0)
-		draw_string(font, _rematch_btn_rect.position + Vector2(12.0, 37.0), tr(&"HUD_REMATCH_BTN"), HORIZONTAL_ALIGNMENT_CENTER, 306.0, 20, white)
+		draw_string(font_bold, _rematch_btn_rect.position + Vector2(12.0, 39.0), tr(&"HUD_REMATCH_BTN"), HORIZONTAL_ALIGNMENT_CENTER, 306.0, 22, white)
 
 		# 5-second countdown bar at bottom of result card
 		var bar_w: float = 330.0 * clampf(result_countdown_sec / 5.0, 0.0, 1.0)
@@ -346,3 +380,79 @@ func _draw_slot_mini_icon(slot_idx: int, c: Vector2, col: Color) -> void:
 		3: # Core / Gear (CORE)
 			draw_circle(c, 6.5, col)
 			draw_circle(c, 2.8, Color(0.08, 0.08, 0.20))
+
+func _draw_overhead_combatants() -> void:
+	var navy_bg := Color(0.078, 0.078, 0.196, 0.92)
+	var gold := Color(1.0, 0.76, 0.12, 1.0)
+	var magenta := Color(1.0, 0.18, 0.576, 1.0)
+	var player_green := Color(0.22, 0.96, 0.38, 1.0)
+	var bot_red := Color(0.96, 0.32, 0.24, 1.0)
+	var you_text: String = tr(&"HUD_YOU_BADGE")
+	var bot_text: String = tr(&"HUD_BOT_BADGE")
+
+	for item: Dictionary in overhead_combatant_data:
+		var p: Vector2 = item["screen_pos"]
+		var is_p: bool = bool(item["is_player"])
+		var is_abom: bool = bool(item["is_abomination"])
+		var ratio: float = float(item["hp_ratio"])
+
+		if is_p:
+			# PLAYER BADGE: Prominent gold badge with "TU" and bright green health bar
+			var badge_w: float = 46.0
+			var badge_h: float = 20.0
+			var badge_rect := Rect2(p + Vector2(-badge_w * 0.5, -34.0), Vector2(badge_w, badge_h))
+			_draw_chamfer_panel(badge_rect, Color(0.12, 0.05, 0.28, 0.95), gold, 4.0)
+
+			# Downward arrow pointing directly at player's head
+			var arrow_pts := PackedVector2Array([
+				p + Vector2(-6.0, -13.0),
+				p + Vector2(6.0, -13.0),
+				p + Vector2(0.0, -6.0),
+			])
+			draw_colored_polygon(arrow_pts, gold)
+
+			if is_abom:
+				_draw_crown(p + Vector2(0.0, -42.0), 12.0, gold)
+
+			draw_string(font_bold, badge_rect.position + Vector2(4.0, 15.0), you_text, HORIZONTAL_ALIGNMENT_CENTER, badge_w - 8.0, 14, gold)
+
+			# Health bar
+			var bar_w: float = 54.0
+			var bar_h: float = 7.0
+			var bar_rect := Rect2(p + Vector2(-bar_w * 0.5, -12.0), Vector2(bar_w, bar_h))
+			draw_rect(bar_rect, navy_bg, true)
+			draw_rect(bar_rect, gold, false, 1.2)
+			var fill_col: Color = player_green if ratio > 0.35 else Color(1.0, 0.35, 0.2)
+			draw_rect(Rect2(bar_rect.position + Vector2(1.0, 1.0), Vector2((bar_w - 2.0) * ratio, bar_h - 2.0)), fill_col, true)
+		else:
+			# BOTS
+			if is_abom:
+				# Abomination Bot: Big warning badge with crown
+				var abom_w: float = 72.0
+				var abom_h: float = 18.0
+				var abom_rect := Rect2(p + Vector2(-abom_w * 0.5, -30.0), Vector2(abom_w, abom_h))
+				_draw_chamfer_panel(abom_rect, Color(0.35, 0.04, 0.12, 0.95), gold, 4.0)
+				_draw_crown(p + Vector2(0.0, -36.0), 10.0, gold)
+				draw_string(font_bold, abom_rect.position + Vector2(2.0, 14.0), bot_text, HORIZONTAL_ALIGNMENT_CENTER, abom_w - 4.0, 12, gold)
+
+				var bar_w: float = 50.0
+				var bar_h: float = 6.0
+				var bar_rect := Rect2(p + Vector2(-bar_w * 0.5, -10.0), Vector2(bar_w, bar_h))
+				draw_rect(bar_rect, navy_bg, true)
+				draw_rect(bar_rect, magenta, false, 1.0)
+				draw_rect(Rect2(bar_rect.position + Vector2(1.0, 1.0), Vector2((bar_w - 2.0) * ratio, bar_h - 2.0)), magenta, true)
+			else:
+				# Regular Bot: clean, compact, non-intrusive
+				var bot_w: float = 38.0
+				var bot_h: float = 5.0
+				var bar_rect := Rect2(p + Vector2(-bot_w * 0.5, -8.0), Vector2(bot_w, bot_h))
+				draw_rect(bar_rect, Color(0.06, 0.05, 0.14, 0.85), true)
+				draw_rect(bar_rect, Color(0.35, 0.32, 0.55, 0.70), false, 1.0)
+				draw_rect(Rect2(bar_rect.position + Vector2(0.5, 0.5), Vector2((bot_w - 1.0) * ratio, bot_h - 1.0)), bot_red, true)
+
+				var bot_tag_w: float = 26.0
+				var bot_tag_h: float = 12.0
+				var tag_rect := Rect2(p + Vector2(-bot_tag_w * 0.5, -22.0), Vector2(bot_tag_w, bot_tag_h))
+				draw_rect(tag_rect, Color(0.06, 0.05, 0.14, 0.75), true)
+				draw_rect(tag_rect, Color(0.32, 0.30, 0.48, 0.60), false, 1.0)
+				draw_string(font_bold, tag_rect.position + Vector2(0.0, 10.0), bot_text, HORIZONTAL_ALIGNMENT_CENTER, bot_tag_w, 10, Color(0.78, 0.78, 0.90))
