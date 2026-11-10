@@ -117,7 +117,11 @@ func _ready() -> void:
 	_rng.seed = 20261109
 	if balance == null:
 		balance = BalanceConfig.new()
-	start_new_match(43.0, false)
+	var start_time: float = 0.0
+	for arg: String in OS.get_cmdline_user_args():
+		if arg == "--static-preview":
+			start_time = 43.0
+	start_new_match(start_time, false)
 
 func start_new_match(initial_elapsed_sec: float = 0.0, emit_restart: bool = true) -> void:
 	match_elapsed_sec = initial_elapsed_sec
@@ -229,18 +233,18 @@ func setup_arena_grid() -> void:
 func spawn_all_combatants() -> void:
 	combatants.clear()
 	var initial_positions: Array[Vector2] = [
-		Vector2(0.0, 4.4),    # 0: Protagonist (foreground center-bottom)
-		Vector2(-3.0, -0.4),  # 1: Red fighter (left mid-ground)
-		Vector2(2.6, -0.6),   # 2: Blue fighter with visor (right mid-ground)
-		Vector2(-2.2, 2.3),   # 3: Green fighter with mohawk (left foreground)
-		Vector2(4.1, 1.2),    # 4: Yellow-orange fighter (right mid-foreground)
-		Vector2(-0.3, -3.6),  # 5: Deep Blue fighter near pedestal
-		Vector2(-5.0, -2.5),  # 6: Hot Pink fighter
-		Vector2(4.8, -3.8),   # 7: Cyan fighter
-		Vector2(-3.6, -6.2),  # 8: Coral fighter
-		Vector2(2.8, -6.5),   # 9: Lime fighter
-		Vector2(-1.2, -7.2),  # 10: Lavender fighter
-		Vector2(-5.4, -5.2),  # 11: Gold fighter (upper-left mid-ground, keeping bottom-right banner clear)
+		Vector2(0.0, 7.5),    # 0: Protagonist (foreground center - generous breathing room)
+		Vector2(-6.5, 4.5),   # 1: Red fighter (left mid-foreground)
+		Vector2(6.5, 4.5),    # 2: Blue fighter with visor (right mid-foreground)
+		Vector2(-7.5, 0.0),   # 3: Green fighter with mohawk (mid left)
+		Vector2(7.5, 0.0),    # 4: Yellow-orange fighter (mid right)
+		Vector2(-4.5, -4.0),  # 5: Deep Blue fighter (left near pedestal)
+		Vector2(4.5, -4.0),   # 6: Hot Pink fighter (right near pedestal)
+		Vector2(0.0, -6.5),   # 7: Cyan fighter (north center)
+		Vector2(-6.5, -9.5),  # 8: Coral fighter (north-west corner)
+		Vector2(6.5, -9.5),   # 9: Lime fighter (north-east corner)
+		Vector2(-2.5, -11.0), # 10: Lavender fighter (far north ruins left)
+		Vector2(2.5, -11.0),  # 11: Gold fighter (far north ruins right)
 	]
 	var bot_loadouts: Array[Dictionary] = [
 		{},
@@ -267,12 +271,24 @@ func spawn_all_combatants() -> void:
 		c.base_color = FIGHTER_PALETTE[i % FIGHTER_PALETTE.size()]
 		c.shape_id = i % 4
 		if i == 0:
-			c.facing_angle = deg_to_rad(-25.0)
-			c.stolen_parts_count = 4
-			c.slots[PartData.Slot.HEAD] = &"laser_eye"
-			c.slots[PartData.Slot.ARMS] = &"chainsaw_arm"
-			c.slots[PartData.Slot.LEGS] = &"rocket_legs"
-			c.slots[PartData.Slot.CORE] = &"crown_core"
+			var is_static_preview: bool = false
+			for arg: String in OS.get_cmdline_user_args():
+				if arg == "--static-preview":
+					is_static_preview = true
+			if is_static_preview:
+				c.facing_angle = deg_to_rad(-25.0)
+				c.stolen_parts_count = 4
+				c.slots[PartData.Slot.HEAD] = &"laser_eye"
+				c.slots[PartData.Slot.ARMS] = &"chainsaw_arm"
+				c.slots[PartData.Slot.LEGS] = &"rocket_legs"
+				c.slots[PartData.Slot.CORE] = &"crown_core"
+			else:
+				c.facing_angle = -PI * 0.5
+				c.stolen_parts_count = 0
+				c.slots[PartData.Slot.HEAD] = &"base_head"
+				c.slots[PartData.Slot.ARMS] = &"base_fist"
+				c.slots[PartData.Slot.LEGS] = &"base_boots"
+				c.slots[PartData.Slot.CORE] = &"base_core"
 		else:
 			c.facing_angle = (Vector2.ZERO - c.pos).angle()
 			c.attack_cooldown = float(i % 4) * 0.12

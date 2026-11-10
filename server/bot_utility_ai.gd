@@ -17,7 +17,7 @@ static func decide_bot_input(
 	server: MatchServer,
 	safe_bounds_xz: Vector2
 ) -> Dictionary:
-	var best_action: StringName = &"attack_nearest"
+	var best_action: StringName = &"patrol_wander"
 	var best_score: float = -1.0
 	var best_target_pos: Vector2 = Vector2.ZERO
 	var request_dash: bool = false
@@ -45,11 +45,11 @@ static func decide_bot_input(
 		if rarity_gain <= 0:
 			continue
 		var dist: float = bot.pos.distance_to(drop.pos)
-		var prox: float = 1.0 - curve_linear(dist / 12.0)
+		var prox: float = 1.0 - curve_linear(dist / 14.0)
 		var gain_norm: float = clampf(float(rarity_gain) / 3.0, 0.35, 1.0)
-		var score: float = prox * 0.75 + gain_norm * 0.35
+		var score: float = prox * 0.78 + gain_norm * 0.38
 		if drop.is_power_part:
-			score += 0.18
+			score += 0.22
 		if score > best_drop_score:
 			best_drop_score = score
 			best_drop = drop
@@ -58,7 +58,7 @@ static func decide_bot_input(
 		best_action = &"collect_upgrade_part"
 		best_target_pos = best_drop.pos
 
-	# 3. Hunt the Abomination (all bots band together to hunt the Abomination if healthy!)
+	# 3. Hunt the Abomination (if healthy and Abomination is active)
 	var abom_target: MatchServer.CombatantState = null
 	var best_abom_dist: float = 999.0
 	for other: MatchServer.CombatantState in server.combatants:
@@ -79,23 +79,38 @@ static func decide_bot_input(
 	# 4. Contest Center Power Pedestal when timer is close
 	var ped_dist: float = bot.pos.distance_to(MatchServer.PEDESTAL_WORLD_XZ)
 	var ped_urgency: float = 1.0 - curve_linear(server.get_power_part_timer() / 8.0)
-	var ped_prox: float = 1.0 - curve_linear(ped_dist / 16.0)
+	var ped_prox: float = 1.0 - curve_linear(ped_dist / 14.0)
 	var ped_score: float = ped_urgency * 0.65 + ped_prox * 0.25
 	if ped_score > best_score:
 		best_score = ped_score
 		best_action = &"contest_power_pedestal"
 		best_target_pos = MatchServer.PEDESTAL_WORLD_XZ
 
-	# 5. Attack / Orbit nearest enemy
-	var nearest: MatchServer.CombatantState = server.find_nearest_enemy(bot.id, 999.0)
+	# 5. Attack nearest enemy within aggro radius (prevents all 11 bots from congregating in 1 mosh pit!)
+	var aggro_radius: float = 8.5 if not server.is_frenzy_active() else 14.0
+	var nearest: MatchServer.CombatantState = server.find_nearest_enemy(bot.id, aggro_radius)
 	if nearest != null:
 		var d_enemy: float = bot.pos.distance_to(nearest.pos)
-		var enemy_prox: float = 1.0 - curve_linear(d_enemy / 14.0)
-		var combat_score: float = 0.46 + 0.42 * enemy_prox
+		var enemy_prox: float = 1.0 - curve_linear(d_enemy / aggro_radius)
+		# Dogpile reduction: count how many bots are already crowding this target
+		var crowd_count: int = 0
+		for other: MatchServer.CombatantState in server.combatants:
+			if other.id != bot.id and other.id != nearest.id and other.alive:
+				if other.pos.distance_to(nearest.pos) < 2.8:
+					crowd_count += 1
+		var crowd_penalty: float = 0.20 * float(crowd_count)
+		var combat_score: float = maxf(0.10, (0.55 + 0.38 * enemy_prox) - crowd_penalty)
 		if combat_score > best_score:
 			best_score = combat_score
 			best_action = &"attack_nearest"
 			best_target_pos = nearest.pos
+
+	# 6. Default Fallback: Patrol / Roam quadrant locally
+	if best_score < 0.22:
+		best_score = 0.25
+		best_action = &"patrol_wander"
+		var t_cycle: float = server.match_elapsed_sec * 0.5 + float(bot.id) * 1.57
+		best_target_pos = bot.pos + Vector2(cos(t_cycle) * 4.0, sin(t_cycle) * 3.0)
 
 	# Convert chosen action into movement vector + dash decision
 	var move_vec := Vector2.ZERO
@@ -117,7 +132,6 @@ static func decide_bot_input(
 			var tangent := Vector2(-dir.y, dir.x) * (1.0 if (bot.id % 2 == 0) else -1.0)
 			var eff_range: float = server.balance.auto_attack_range * bot.range_mult
 			if hp_ratio < 0.28 and dist < eff_range * 1.1:
-				# Low HP kite back + strafe
 				move_vec = (-dir * 0.72 + tangent * 0.55).normalized()
 			elif dist > eff_range * 0.85:
 				move_vec = (dir * 0.82 + tangent * 0.32).normalized()
@@ -127,6 +141,12 @@ static func decide_bot_input(
 				move_vec = (-dir * 0.55 + tangent * 0.65).normalized()
 			else:
 				move_vec = (tangent * 0.78).normalized()
+		&"patrol_wander":
+			var wander_diff: Vector2 = best_target_pos - bot.pos
+			if wander_diff.length_squared() > 0.1:
+				move_vec = wander_diff.normalized() * 0.65
+			else:
+				move_vec = Vector2.ZERO
 
 	return {
 		"action": best_action,

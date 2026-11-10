@@ -66,7 +66,12 @@ func build_from_server(server: MatchServer) -> void:
 	_build_grid_props(server, tile)
 	_build_power_pedestal(Vector3(2.2, 0.0, -4.8))
 	_build_background_ruins_and_cliffs()
-	_build_dust_and_action_accents()
+	var is_static_preview: bool = false
+	for arg: String in OS.get_cmdline_user_args():
+		if arg == "--static-preview":
+			is_static_preview = true
+	if is_static_preview:
+		_build_dust_and_action_accents()
 	_init_debris_pool()
 
 	for drop: MatchServer.DroppedPartState in server.dropped_parts:

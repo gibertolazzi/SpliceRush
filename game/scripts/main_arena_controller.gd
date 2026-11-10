@@ -23,6 +23,7 @@ var _joystick_vec: Vector2 = Vector2.ZERO
 var _ability_queued: bool = false
 var _frame_counter: int = 0
 var _screenshot_path: String = ""
+var _target_screenshot_frame: int = 15
 var _simulate_input_preview: bool = false
 var _preview_frenzy: bool = false
 var _preview_clip: bool = false
@@ -50,6 +51,8 @@ func _parse_cmdline_args() -> void:
 	for arg: String in OS.get_cmdline_user_args():
 		if arg.begins_with("--capture-screenshot="):
 			_screenshot_path = arg.trim_prefix("--capture-screenshot=")
+		elif arg.begins_with("--screenshot-frame="):
+			_target_screenshot_frame = int(arg.trim_prefix("--screenshot-frame="))
 		elif arg == "--simulate-input":
 			_simulate_input_preview = true
 		elif arg == "--preview-frenzy":
@@ -131,7 +134,7 @@ func _setup_camera() -> void:
 	camera.fov = balance.camera_fov_deg
 	camera.near = 0.2
 	camera.far = 95.0
-	camera.position = Vector3(0.0, 6.8, 11.0)
+	camera.position = Vector3(0.0, 10.5, 15.0)
 	camera.rotation_degrees = Vector3(balance.camera_pitch_deg, 0.0, 0.0)
 	add_child(camera)
 	camera.make_current()
@@ -219,6 +222,7 @@ func _setup_ui() -> void:
 	if not server.combatants.is_empty():
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)
+		hud.on_stolen_parts_updated(p0.stolen_parts_count)
 
 func trigger_hit_stop(duration_sec: float, time_scale_val: float = 0.12) -> void:
 	if _screenshot_path != "":
@@ -282,8 +286,10 @@ func _process(delta: float) -> void:
 	arena_builder.sync_dropped_parts(server.dropped_parts, delta)
 	arena_builder.update_arena_vfx(delta)
 	_update_attack_fx(delta)
+	if hud != null:
+		hud.update_overhead_combatants(server.combatants, camera)
 
-	if _screenshot_path != "" and _frame_counter == 12:
+	if _screenshot_path != "" and _frame_counter >= _target_screenshot_frame:
 		var img: Image = get_viewport().get_texture().get_image()
 		img.save_png(_screenshot_path)
 		get_tree().quit(0)
@@ -300,9 +306,9 @@ func _update_camera_follow(dt: float) -> void:
 		desired_fov = balance.camera_fov_deg - 2.4
 	camera.fov = lerpf(camera.fov, desired_fov, minf(1.0, 12.0 * dt))
 
-	var target_x: float = clampf(focus_pos.x * 0.45, -3.2, 3.2)
-	var target_z: float = clampf(focus_pos.y + balance.camera_z_bias, 4.5, 13.5)
-	var desired := Vector3(target_x, 6.8, target_z)
+	var target_x: float = clampf(focus_pos.x * 0.78, -7.5, 7.5)
+	var target_z: float = clampf(focus_pos.y + balance.camera_z_bias, -8.0, 18.0)
+	var desired := Vector3(target_x, 10.5, target_z)
 	var t: float = 1.0 - exp(-balance.camera_smooth_rate * dt)
 	var base_cam_pos: Vector3 = camera.position.lerp(desired, t)
 
