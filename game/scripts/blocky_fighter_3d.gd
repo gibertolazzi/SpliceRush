@@ -31,6 +31,7 @@ var rocket_flame: MeshInstance3D
 var bot_indicator_root: Node3D
 var abomination_marker_root: Node3D
 var abomination_ring: MeshInstance3D
+var transform_burst_ring: MeshInstance3D
 
 var _bone_head: int = -1
 var _bone_left_arm: int = -1
@@ -241,6 +242,18 @@ func _build_base_skeleton() -> void:
 	abomination_ring.visible = false
 	add_child(abomination_ring)
 
+	transform_burst_ring = MeshInstance3D.new()
+	var burst_torus := TorusMesh.new()
+	burst_torus.inner_radius = 0.65
+	burst_torus.outer_radius = 0.85
+	burst_torus.rings = 24
+	burst_torus.ring_segments = 6
+	transform_burst_ring.mesh = burst_torus
+	transform_burst_ring.position = Vector3(0.0, 0.08, 0.0)
+	transform_burst_ring.material_override = _shared_gold_mat if fighter_id == 0 else _shared_white_mat
+	transform_burst_ring.visible = false
+	add_child(transform_burst_ring)
+
 	var base_s: float = _get_target_base_scale()
 	pivot.scale = Vector3.ONE * base_s
 
@@ -369,10 +382,13 @@ func apply_slots(new_slots: Dictionary, abom: bool, animate_pop: bool = true) ->
 		trigger_transform_pop()
 
 func trigger_transform_pop() -> void:
-	_transform_flash_timer = 0.28
+	_transform_flash_timer = 0.32
+	if transform_burst_ring != null:
+		transform_burst_ring.visible = true
+		transform_burst_ring.scale = Vector3(0.35, 0.35, 0.35)
 	if pivot != null:
 		var base_s: float = _get_target_base_scale()
-		pivot.scale = Vector3(1.30, 0.75, 1.30) * base_s
+		pivot.scale = Vector3(1.38, 0.68, 1.38) * base_s
 
 func _get_target_base_scale() -> float:
 	if fighter_id == 0:
@@ -671,7 +687,19 @@ func update_visual_state(
 	var base_s: float = _get_target_base_scale()
 	if _transform_flash_timer > 0.0:
 		_transform_flash_timer = maxf(0.0, _transform_flash_timer - dt)
-		pivot.scale = pivot.scale.lerp(Vector3(1.12, 1.18, 1.12) * base_s, minf(1.0, 16.0 * dt))
+		var t_norm: float = 1.0 - (_transform_flash_timer / 0.32)
+		if transform_burst_ring != null and transform_burst_ring.visible:
+			transform_burst_ring.scale = Vector3.ONE * lerpf(0.35, 2.8, t_norm)
+			if _transform_flash_timer <= 0.0:
+				transform_burst_ring.visible = false
+		var target_scale := Vector3.ONE
+		if t_norm < 0.22:
+			target_scale = Vector3(1.38, 0.68, 1.38) # Squash
+		elif t_norm < 0.62:
+			target_scale = Vector3(0.92, 1.26, 0.92) # Stretch overshoot
+		else:
+			target_scale = Vector3.ONE # Spring settle
+		pivot.scale = pivot.scale.lerp(target_scale * base_s, minf(1.0, 18.0 * dt))
 	elif hurt_timer > 0.0:
 		pivot.scale = Vector3(1.18, 0.84, 1.18) * base_s
 	else:

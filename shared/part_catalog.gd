@@ -212,6 +212,30 @@ static func get_rarity_color(rarity: PartData.Rarity) -> Color:
 			return Color(1.0, 0.74, 0.14)
 	return Color.WHITE
 
+static func get_rarity_translation_key(rarity: PartData.Rarity) -> StringName:
+	match rarity:
+		PartData.Rarity.COMMON:
+			return &"RARITY_COMMON"
+		PartData.Rarity.RARE:
+			return &"RARITY_RARE"
+		PartData.Rarity.EPIC:
+			return &"RARITY_EPIC"
+		PartData.Rarity.LEGENDARY:
+			return &"RARITY_LEGENDARY"
+	return &"RARITY_COMMON"
+
+static func get_slot_name_translation_key(slot: PartData.Slot) -> StringName:
+	match slot:
+		PartData.Slot.HEAD:
+			return &"SLOT_NAME_HEAD"
+		PartData.Slot.ARMS:
+			return &"SLOT_NAME_ARMS"
+		PartData.Slot.LEGS:
+			return &"SLOT_NAME_LEGS"
+		PartData.Slot.CORE:
+			return &"SLOT_NAME_CORE"
+	return &"SLOT_NAME_ARMS"
+
 static func compute_slots_mass(slots: Dictionary) -> int:
 	_ensure_initialized()
 	var total: int = 0

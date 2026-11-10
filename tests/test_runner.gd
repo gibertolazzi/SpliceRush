@@ -22,6 +22,7 @@ func _initialize() -> void:
 		"test_brawl_royale_lives_and_elimination",
 		"test_severed_limb_debuffs",
 		"test_multiple_map_themes",
+		"test_combat_juice_and_stolen_flying_part",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -528,4 +529,80 @@ func test_multiple_map_themes() -> bool:
 	assert_true(srv.grid_cells.size() < 1280, "floating_hex_has_void_islands")
 
 	srv.free()
+	return true
+
+func test_combat_juice_and_stolen_flying_part() -> bool:
+	# 1. Test I18n translations for "RUBATO!" and slot & rarity titles
+	I18nService.register_translations()
+	TranslationServer.set_locale("it")
+	assert_eq(tr(&"HUD_PART_STOLEN_BANNER_TITLE"), "RUBATO!", "it_part_stolen_banner_title")
+	assert_eq(tr(&"RARITY_EPIC"), "EPICO", "it_rarity_epic")
+	assert_eq(tr(&"SLOT_NAME_ARMS"), "BRACCIA", "it_slot_arms")
+	TranslationServer.set_locale("en")
+	assert_eq(tr(&"HUD_PART_STOLEN_BANNER_TITLE"), "STOLEN!", "en_part_stolen_banner_title")
+	assert_eq(tr(&"RARITY_EPIC"), "EPIC", "en_rarity_epic")
+	TranslationServer.set_locale("it")
+
+	# 2. Test ArenaBuilder3D Juice Pools
+	var ab := ArenaBuilder3D.new()
+	root.add_child(ab)
+	var srv := MatchServer.new()
+	srv.bots_enabled = false
+	root.add_child(srv)
+	ab.build_from_server(srv)
+
+	assert_true(ab.impact_star_pool.size() > 0, "arena_builder_has_impact_star_pool")
+	assert_true(ab.spark_pool.size() > 0, "arena_builder_has_spark_pool")
+	assert_true(ab.dust_pool.size() > 0, "arena_builder_has_dust_pool")
+
+	# 3. Test Impact Starburst and Dash Dust Spawning
+	ab.spawn_impact_star(Vector2(2.0, 3.0), false)
+	assert_eq(ab.active_impact_stars.size(), 1, "active_impact_star_spawned")
+	assert_true(ab.active_sparks.size() >= 4, "impact_sparks_spawned")
+
+	ab.spawn_dash_dust(Vector3(1.0, 0.0, 2.0), Vector2(-1.0, 0.0))
+	assert_true(ab.active_dust.size() >= 4, "dash_dust_puffs_spawned")
+
+	# 4. Test Flying Stolen Part Visual & Arrival Callback
+	var target_dummy := Node3D.new()
+	target_dummy.position = Vector3(0.0, 0.0, 0.0)
+	root.add_child(target_dummy)
+
+	var arrival_state: Array[bool] = [false]
+	var on_arrive := func() -> void:
+		arrival_state[0] = true
+
+	ab.spawn_flying_part(999, &"chainsaw_arm", int(PartData.Slot.ARMS), int(PartData.Rarity.EPIC), Vector2(4.0, 4.0), target_dummy, on_arrive)
+	assert_eq(ab.active_flying_parts.size(), 1, "flying_part_registered_in_flight")
+
+	# Step VFX to completion (duration 0.28s)
+	ab.update_arena_vfx(0.15)
+	assert_eq(arrival_state[0], false, "flying_part_in_transit")
+	ab.update_arena_vfx(0.16)
+	assert_eq(arrival_state[0], true, "flying_part_arrived_at_target_body")
+	assert_eq(ab.active_flying_parts.size(), 0, "flying_part_freed_on_arrival")
+
+	# 5. Test BlockyFighter3D Squash & Stretch and Burst Ring
+	var fighter := BlockyFighter3D.new()
+	root.add_child(fighter)
+	fighter.setup_fighter(0, false, Color.WHITE, 0, srv.combatants[0].slots, false)
+	assert_true(fighter.transform_burst_ring != null, "fighter_has_transform_burst_ring")
+
+	fighter.trigger_transform_pop()
+	assert_true(fighter._transform_flash_timer > 0.0, "transform_flash_timer_started")
+	assert_eq(fighter.transform_burst_ring.visible, true, "transform_burst_ring_active")
+
+	# 6. Test VerticalHUD Stolen Banner & Slot Aura Pulse
+	var hud := VerticalHUD.new()
+	root.add_child(hud)
+	hud.show_part_stolen_banner(&"chainsaw_arm", int(PartData.Rarity.EPIC), int(PartData.Slot.ARMS))
+	assert_true(hud._stolen_banner_timer > 0.0, "stolen_banner_timer_active")
+	assert_eq(hud._stolen_part_id, &"chainsaw_arm", "stolen_banner_part_id_set")
+	assert_true(hud._slot_flash_timers[int(PartData.Slot.ARMS)] > 0.0, "stolen_slot_flashing_gold_aura")
+
+	hud.free()
+	fighter.free()
+	target_dummy.free()
+	srv.free()
+	ab.free()
 	return true

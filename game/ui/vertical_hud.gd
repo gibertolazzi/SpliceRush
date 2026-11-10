@@ -28,6 +28,12 @@ var _toast_text: String = ""
 var _toast_timer: float = 0.0
 var _flash_timer: float = 0.0
 var _speed_lines_timer: float = 0.0
+var _stolen_banner_timer: float = 0.0
+var _stolen_banner_max: float = 1.8
+var _stolen_part_id: StringName = &""
+var _stolen_rarity: int = 0
+var _stolen_slot: int = 0
+var _slot_flash_timers: Array[float] = [0.0, 0.0, 0.0, 0.0]
 var _rematch_btn_rect := Rect2(Vector2(110.0, 560.0), Vector2(320.0, 48.0))
 var _customize_btn_rect := Rect2(Vector2(110.0, 614.0), Vector2(320.0, 36.0))
 var overhead_combatant_data: Array[Dictionary] = []
@@ -68,6 +74,13 @@ func _process(delta: float) -> void:
 	if _speed_lines_timer > 0.0:
 		_speed_lines_timer = maxf(0.0, _speed_lines_timer - delta)
 		needs_redraw = true
+	if _stolen_banner_timer > 0.0:
+		_stolen_banner_timer = maxf(0.0, _stolen_banner_timer - delta)
+		needs_redraw = true
+	for s_i: int in range(4):
+		if _slot_flash_timers[s_i] > 0.0:
+			_slot_flash_timers[s_i] = maxf(0.0, _slot_flash_timers[s_i] - delta)
+			needs_redraw = true
 	if show_result_overlay and result_countdown_sec > 0.0:
 		result_countdown_sec = maxf(0.0, result_countdown_sec - delta)
 		needs_redraw = true
@@ -169,6 +182,18 @@ func show_part_stolen_toast(part_id: StringName) -> void:
 	_flash_timer = 0.22
 	_speed_lines_timer = 0.45
 	queue_redraw()
+
+func show_part_stolen_banner(part_id: StringName, rarity: int, slot: int) -> void:
+	_stolen_part_id = part_id
+	_stolen_rarity = rarity
+	_stolen_slot = slot
+	_stolen_banner_timer = 1.8
+	_stolen_banner_max = 1.8
+	_flash_timer = 0.22
+	_speed_lines_timer = 0.55
+	if slot >= 0 and slot < _slot_flash_timers.size():
+		_slot_flash_timers[slot] = 1.6
+	show_part_stolen_toast(part_id)
 
 func trigger_impact_speed_lines(duration_sec: float = 0.28) -> void:
 	_speed_lines_timer = maxf(_speed_lines_timer, duration_sec)
@@ -290,6 +315,13 @@ func _draw() -> void:
 
 		_draw_slot_svg_icon(s_idx, box_r, icon_alpha, r_col)
 
+		if int(slot_enum) < _slot_flash_timers.size() and _slot_flash_timers[int(slot_enum)] > 0.0:
+			var f_timer: float = _slot_flash_timers[int(slot_enum)]
+			var p_alpha: float = clampf(f_timer / 1.6, 0.0, 1.0)
+			var pulse: float = 0.5 + 0.5 * sin(f_timer * 16.0)
+			draw_rect(box_r, Color(1.0, 0.85, 0.20, 0.95 * p_alpha), false, 3.2)
+			draw_rect(box_r, Color(1.0, 0.85, 0.20, 0.35 * pulse * p_alpha), true)
+
 		if colorblind_mode_enabled:
 			var pip_count: int = int(pdata.rarity) + 1
 			for p_i: int in range(pip_count):
@@ -323,7 +355,7 @@ func _draw() -> void:
 				draw_rect(pip_r, gold, true)
 			else:
 				draw_rect(pip_r, Color(0.5, 0.20, 0.28, 0.8), false, 1.5)
-	elif _toast_timer > 0.0 and _toast_text != "":
+	elif _toast_timer > 0.0 and _toast_text != "" and _stolen_banner_timer <= 0.0:
 		var toast_rect := Rect2(Vector2(rect_size.x - 196.0, 82.0), Vector2(184.0, 28.0))
 		_draw_chamfer_panel(toast_rect, Color(0.10, 0.06, 0.24, 0.96), gold, 5.0)
 		draw_string(font_bold, toast_rect.position + Vector2(8.0, 20.0), _toast_text, HORIZONTAL_ALIGNMENT_CENTER, 168.0, 15, gold)
@@ -340,6 +372,9 @@ func _draw() -> void:
 
 	# 5. ABOMINATION TRANSFORMATION STINGER BANNER
 	_draw_abomination_active_banner(rect_size)
+
+	# 5.5. JUICY STOLEN PART BANNER ("RUBATO!")
+	_draw_stolen_part_banner(rect_size)
 
 	# 6. 5-SECOND RESULT OVERLAY & 1-TAP REMATCH BUTTON (Passo 3)
 	if show_result_overlay:
@@ -519,6 +554,79 @@ func _draw_abomination_active_banner(rect_size: Vector2) -> void:
 	var line2: String = active_lines[1] if active_lines.size() > 1 else tr(&"HUD_ABOMINATION_HUNT")
 	var full_text: String = "%s %s" % [line1, line2]
 	draw_string(font_bold, ban_rect.position + Vector2(8.0, 42.0), full_text, HORIZONTAL_ALIGNMENT_CENTER, ban_w - 16.0, 20, Color(1.0, 0.88, 0.2, b_alpha))
+
+func _draw_stolen_part_banner(rect_size: Vector2) -> void:
+	if _stolen_banner_timer <= 0.0 or show_result_overlay or _stolen_part_id == &"":
+		return
+
+	var t_elapsed: float = _stolen_banner_max - _stolen_banner_timer
+	var enter_fade: float = clampf(t_elapsed / 0.18, 0.0, 1.0)
+	var exit_fade: float = clampf(_stolen_banner_timer / 0.35, 0.0, 1.0)
+	var alpha: float = minf(enter_fade, exit_fade)
+	if alpha <= 0.01:
+		return
+
+	# Overshoot bounce on entry
+	var scale_pop: float = 1.0
+	if t_elapsed < 0.25:
+		var p_t: float = t_elapsed / 0.25
+		scale_pop = lerpf(0.65, 1.08, sin(p_t * PI * 0.5))
+	else:
+		scale_pop = 1.0 + 0.02 * sin(t_elapsed * 8.0)
+
+	var center_pt := Vector2(rect_size.x * 0.5, 212.0)
+
+	# 1. Radiant rotating sunburst rays behind banner
+	var ray_count: int = 16
+	var ray_len: float = 210.0 * scale_pop
+	var ray_rot: float = t_elapsed * 2.2
+	for r_i: int in range(ray_count):
+		var ang: float = float(r_i) * (TAU / float(ray_count)) + ray_rot
+		var dir := Vector2(cos(ang), sin(ang))
+		var r_col: Color = Color(1.0, 0.82, 0.18, 0.35 * alpha) if (r_i % 2 == 0) else Color(1.0, 0.20, 0.58, 0.28 * alpha)
+		var p1: Vector2 = center_pt + dir * 42.0
+		var p2: Vector2 = center_pt + dir * ray_len
+		draw_line(p1, p2, r_col, 5.5 * scale_pop)
+
+	# 2. Main banner card (slight dynamic tilt)
+	var ban_w: float = clampf((rect_size.x - 32.0) * scale_pop, 280.0, 480.0)
+	var ban_h: float = 90.0 * scale_pop
+	var ban_rect := Rect2(center_pt - Vector2(ban_w * 0.5, ban_h * 0.5), Vector2(ban_w, ban_h))
+
+	var navy_bg := Color(0.08, 0.05, 0.22, 0.98 * alpha)
+	var gold := Color(1.0, 0.82, 0.18, alpha)
+	var magenta := Color(1.0, 0.18, 0.58, alpha)
+
+	# Double chamfer panel with outer magenta and inner border
+	_draw_chamfer_panel(ban_rect, navy_bg, magenta, 10.0 * scale_pop)
+	var inner_rect := Rect2(ban_rect.position + Vector2(4.0, 4.0), ban_rect.size - Vector2(8.0, 8.0))
+	_draw_chamfer_panel(inner_rect, Color(0.14, 0.09, 0.32, 0.98 * alpha), gold, 8.0 * scale_pop)
+
+	# Crown emblem at top center of banner
+	_draw_crown(Vector2(ban_rect.get_center().x, ban_rect.position.y + 6.0), 16.0 * scale_pop, gold)
+
+	# 3. Header: "RUBATO!" in bold italic with drop shadow
+	var title_str: String = tr(&"HUD_PART_STOLEN_BANNER_TITLE")
+	var title_fsize: int = int(round(42.0 * scale_pop))
+	# Drop shadow
+	draw_string(font_bold, ban_rect.position + Vector2(2.0, 44.0 * scale_pop + 2.0), title_str, HORIZONTAL_ALIGNMENT_CENTER, ban_w, title_fsize, Color(0.0, 0.0, 0.0, 0.90 * alpha))
+	# Main glowing text
+	draw_string(font_bold, ban_rect.position + Vector2(0.0, 44.0 * scale_pop), title_str, HORIZONTAL_ALIGNMENT_CENTER, ban_w, title_fsize, gold)
+
+	# 4. Subtitle: e.g. "MOTOSEGA [EPICO]"
+	var pdata: PartData = PartCatalog.get_part(_stolen_part_id)
+	var part_name: String = tr(pdata.translation_key)
+	var r_color: Color = PartCatalog.get_rarity_color(pdata.rarity)
+	r_color.a = alpha
+	var rarity_key: StringName = PartCatalog.get_rarity_translation_key(pdata.rarity)
+	var sub_str: String = "%s  [%s]" % [part_name.to_upper(), tr(rarity_key)]
+	var sub_fsize: int = int(round(18.0 * scale_pop))
+
+	var badge_w: float = clampf(280.0 * scale_pop, 200.0, ban_w - 24.0)
+	var badge_r := Rect2(Vector2(center_pt.x - badge_w * 0.5, ban_rect.position.y + 56.0 * scale_pop), Vector2(badge_w, 24.0 * scale_pop))
+	draw_rect(badge_r, Color(0.07, 0.04, 0.18, 0.92 * alpha), true)
+	draw_rect(badge_r, r_color, false, 1.5)
+	draw_string(font_bold, badge_r.position + Vector2(0.0, 18.0 * scale_pop), sub_str, HORIZONTAL_ALIGNMENT_CENTER, badge_w, sub_fsize, r_color)
 
 func _draw_chamfer_panel(r: Rect2, fill: Color, border: Color, cut: float) -> void:
 	var pts := PackedVector2Array([

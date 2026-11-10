@@ -12,6 +12,13 @@ var floor_base_mi: MeshInstance3D
 var frenzy_perimeter_root: Node3D
 var debris_pool: Array[MeshInstance3D] = []
 var active_debris: Array[Dictionary] = []
+var impact_star_pool: Array[Node3D] = []
+var active_impact_stars: Array[Dictionary] = []
+var spark_pool: Array[MeshInstance3D] = []
+var active_sparks: Array[Dictionary] = []
+var dust_pool: Array[MeshInstance3D] = []
+var active_dust: Array[Dictionary] = []
+var active_flying_parts: Array[Dictionary] = []
 
 var _stone_mat_a: StandardMaterial3D
 var _stone_mat_b: StandardMaterial3D
@@ -20,6 +27,9 @@ var _stone_rim_mat: StandardMaterial3D
 var _debris_mat: StandardMaterial3D
 var _gold_glow_mat: StandardMaterial3D
 var _white_glow_mat: StandardMaterial3D
+var _magenta_glow_mat: StandardMaterial3D
+var _spark_mat: StandardMaterial3D
+var _dust_mat: StandardMaterial3D
 var _cloud_mat_a: StandardMaterial3D
 var _cloud_mat_b: StandardMaterial3D
 var _rarity_mats: Dictionary = {}
@@ -55,6 +65,19 @@ func _init_materials() -> void:
 	_white_glow_mat = StandardMaterial3D.new()
 	_white_glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_white_glow_mat.albedo_color = Color(1.0, 0.96, 0.84)
+
+	_magenta_glow_mat = StandardMaterial3D.new()
+	_magenta_glow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_magenta_glow_mat.albedo_color = Color(1.0, 0.18, 0.58)
+
+	_spark_mat = StandardMaterial3D.new()
+	_spark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_spark_mat.albedo_color = Color(1.0, 0.95, 0.45)
+
+	_dust_mat = StandardMaterial3D.new()
+	_dust_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_dust_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_dust_mat.albedo_color = Color(0.90, 0.86, 0.98, 0.65)
 
 	_cloud_mat_a = StandardMaterial3D.new()
 	_cloud_mat_a.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -123,7 +146,7 @@ func build_from_server(server: MatchServer) -> void:
 	_build_background_ruins_and_cliffs(server, is_static_preview)
 	if is_static_preview:
 		_build_dust_and_action_accents()
-	_init_debris_pool()
+	_init_vfx_pools()
 
 	for drop: MatchServer.DroppedPartState in server.dropped_parts:
 		spawn_dropped_part_visual(drop.id, drop.part_id, int(drop.slot), int(drop.rarity), drop.pos, drop.is_power_part)
@@ -504,7 +527,8 @@ func _build_dust_and_action_accents() -> void:
 	_spawn_box(impact, Vector3(0.20, 1.5, 0.20), Vector3.ZERO, _white_glow_mat, Vector3(0.0, 20.0, 25.0))
 	_spawn_box(impact, Vector3(1.1, 0.24, 0.24), Vector3.ZERO, _gold_glow_mat, Vector3(0.0, 20.0, 70.0))
 
-func _init_debris_pool() -> void:
+func _init_vfx_pools() -> void:
+	# 1. Impact debris chunks
 	for i: int in range(18):
 		var mi := MeshInstance3D.new()
 		var bm := BoxMesh.new()
@@ -514,6 +538,42 @@ func _init_debris_pool() -> void:
 		mi.visible = false
 		add_child(mi)
 		debris_pool.append(mi)
+
+	# 2. Impact starburst flashes (key art impact stars facing camera)
+	for i: int in range(8):
+		var star_root := Node3D.new()
+		star_root.name = "ImpactStar_%d" % i
+		star_root.rotation_degrees = Vector3(58.0, 0.0, 0.0)
+		star_root.visible = false
+		add_child(star_root)
+		_spawn_box(star_root, Vector3(0.18, 1.45, 0.04), Vector3.ZERO, _white_glow_mat)
+		_spawn_box(star_root, Vector3(1.45, 0.18, 0.04), Vector3.ZERO, _white_glow_mat)
+		_spawn_box(star_root, Vector3(0.14, 1.05, 0.04), Vector3.ZERO, _gold_glow_mat, Vector3(0.0, 0.0, 45.0))
+		_spawn_box(star_root, Vector3(1.05, 0.14, 0.04), Vector3.ZERO, _gold_glow_mat, Vector3(0.0, 0.0, 45.0))
+		_spawn_box(star_root, Vector3(0.40, 0.40, 0.06), Vector3.ZERO, _white_glow_mat)
+		impact_star_pool.append(star_root)
+
+	# 3. Flying spark specks
+	for i: int in range(24):
+		var sp := MeshInstance3D.new()
+		var sm := BoxMesh.new()
+		sm.size = Vector3(0.12, 0.12, 0.12)
+		sp.mesh = sm
+		sp.material_override = _spark_mat
+		sp.visible = false
+		add_child(sp)
+		spark_pool.append(sp)
+
+	# 4. Cartoon low-poly dust puffs
+	for i: int in range(24):
+		var dp := MeshInstance3D.new()
+		var dm := BoxMesh.new()
+		dm.size = Vector3(0.40, 0.40, 0.40)
+		dp.mesh = dm
+		dp.material_override = _dust_mat
+		dp.visible = false
+		add_child(dp)
+		dust_pool.append(dp)
 
 func spawn_impact_debris(world_xz: Vector2, count: int = 4) -> void:
 	for i: int in range(count):
@@ -529,8 +589,114 @@ func spawn_impact_debris(world_xz: Vector2, count: int = 4) -> void:
 			"ttl": 0.55,
 		})
 
+func spawn_impact_star(world_xz: Vector2, is_crit_or_ko: bool = false) -> void:
+	var star_node: Node3D = null
+	if not impact_star_pool.is_empty():
+		star_node = impact_star_pool.pop_back()
+	elif not active_impact_stars.is_empty():
+		var oldest: Dictionary = active_impact_stars.pop_front()
+		star_node = oldest["node"]
+	if star_node == null:
+		return
+
+	star_node.visible = true
+	star_node.position = Vector3(world_xz.x, 1.25, world_xz.y)
+	var peak: float = 2.4 if is_crit_or_ko else 1.55
+	var lifetime: float = 0.22 if is_crit_or_ko else 0.16
+	star_node.scale = Vector3(0.15, 0.15, 0.15)
+	active_impact_stars.append({
+		"node": star_node,
+		"ttl": lifetime,
+		"max_ttl": lifetime,
+		"peak_scale": peak,
+		"rot": 0.0,
+	})
+	spawn_impact_sparks(world_xz, 8 if is_crit_or_ko else 4)
+	spawn_dust_puff(Vector3(world_xz.x, 0.35, world_xz.y), 2, 0.3)
+
+func spawn_impact_sparks(world_xz: Vector2, count: int = 6) -> void:
+	for i: int in range(count):
+		if spark_pool.is_empty():
+			break
+		var sp: MeshInstance3D = spark_pool.pop_back()
+		sp.visible = true
+		sp.position = Vector3(world_xz.x, 1.15, world_xz.y)
+		sp.scale = Vector3.ONE
+		var angle: float = float(i) * (TAU / float(maxi(count, 1))) + randf_range(-0.3, 0.3)
+		var spd: float = randf_range(3.2, 5.8)
+		active_sparks.append({
+			"node": sp,
+			"vel": Vector3(cos(angle) * spd, randf_range(3.5, 6.2), sin(angle) * spd),
+			"ttl": randf_range(0.24, 0.40),
+			"max_ttl": 0.40,
+		})
+
+func spawn_dust_puff(pos_3d: Vector3, count: int = 3, spread: float = 0.4) -> void:
+	for i: int in range(count):
+		if dust_pool.is_empty():
+			break
+		var dp: MeshInstance3D = dust_pool.pop_back()
+		dp.visible = true
+		var offset := Vector3(randf_range(-spread, spread), randf_range(0.02, 0.15), randf_range(-spread, spread))
+		dp.position = pos_3d + offset
+		dp.scale = Vector3(0.25, 0.25, 0.25)
+		active_dust.append({
+			"node": dp,
+			"vel": Vector3(randf_range(-0.5, 0.5), randf_range(1.1, 1.8), randf_range(-0.5, 0.5)),
+			"ttl": 0.36,
+			"max_ttl": 0.36,
+		})
+
+func spawn_dash_dust(pos_3d: Vector3, back_dir_xz: Vector2) -> void:
+	var base_pos := Vector3(pos_3d.x, 0.12, pos_3d.z)
+	var norm_dir: Vector2 = back_dir_xz.normalized()
+	for i: int in range(4):
+		if dust_pool.is_empty():
+			break
+		var dp: MeshInstance3D = dust_pool.pop_back()
+		dp.visible = true
+		var spread_angle: float = randf_range(-0.4, 0.4)
+		var rotated_dir: Vector2 = norm_dir.rotated(spread_angle)
+		dp.position = base_pos + Vector3(rotated_dir.x * 0.25 * float(i), 0.05, rotated_dir.y * 0.25 * float(i))
+		dp.scale = Vector3(0.30, 0.30, 0.30)
+		active_dust.append({
+			"node": dp,
+			"vel": Vector3(rotated_dir.x * randf_range(2.4, 4.2), randf_range(1.2, 2.0), rotated_dir.y * randf_range(2.4, 4.2)),
+			"ttl": 0.32,
+			"max_ttl": 0.32,
+		})
+
+func spawn_flying_part(drop_id: int, part_id: StringName, slot: int, rarity: int, start_xz: Vector2, target_node: Node3D, on_arrived: Callable) -> void:
+	var item_root: Node3D = null
+	if dropped_part_nodes.has(drop_id):
+		item_root = dropped_part_nodes[drop_id]
+		dropped_part_nodes.erase(drop_id)
+	else:
+		item_root = Node3D.new()
+		item_root.name = "FlyingDrop_%d" % drop_id
+		item_root.position = Vector3(start_xz.x, 0.65, start_xz.y)
+		add_child(item_root)
+		var pdata: PartData = PartCatalog.get_part(part_id)
+		var r_mat: StandardMaterial3D = _rarity_mats.get(rarity, _gold_glow_mat) as StandardMaterial3D
+		var prim_mat := StandardMaterial3D.new()
+		prim_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		prim_mat.albedo_color = pdata.primary_color
+		var box_item := _spawn_box(item_root, Vector3(0.52, 0.52, 0.52), Vector3.ZERO, prim_mat)
+		_spawn_box(box_item, Vector3(0.58, 0.16, 0.58), Vector3.ZERO, r_mat)
+
+	active_flying_parts.append({
+		"node": item_root,
+		"start_pos": Vector3(start_xz.x, 0.65, start_xz.y),
+		"target_node": target_node,
+		"progress": 0.0,
+		"duration": 0.28,
+		"on_arrived": on_arrived,
+		"trail_timer": 0.0,
+	})
+
 func on_block_damaged(cell: Vector2i, _remaining_hp: int, destroyed: bool, world_xz: Vector2) -> void:
 	spawn_impact_debris(world_xz, 5 if destroyed else 2)
+	spawn_impact_star(world_xz, destroyed)
 	if destroyed and destructible_nodes.has(cell):
 		var n: Node3D = destructible_nodes[cell]
 		if is_instance_valid(n):
@@ -542,6 +708,7 @@ func update_arena_vfx(dt: float) -> void:
 		power_cube_node.rotate_y(1.4 * dt)
 		power_cube_node.position.y = 1.45 + sin(float(Time.get_ticks_msec()) * 0.004) * 0.14
 
+	# 1. Update impact debris
 	var idx: int = active_debris.size() - 1
 	while idx >= 0:
 		var item: Dictionary = active_debris[idx]
@@ -560,6 +727,111 @@ func update_arena_vfx(dt: float) -> void:
 			item["vel"] = vel
 			item["ttl"] = ttl
 		idx -= 1
+
+	# 2. Update impact stars (rapid pop overshoot -> settle to zero)
+	var star_idx: int = active_impact_stars.size() - 1
+	while star_idx >= 0:
+		var s_data: Dictionary = active_impact_stars[star_idx]
+		var s_node: Node3D = s_data["node"]
+		var ttl: float = float(s_data["ttl"]) - dt
+		if ttl <= 0.0:
+			s_node.visible = false
+			impact_star_pool.append(s_node)
+			active_impact_stars.remove_at(star_idx)
+		else:
+			var max_t: float = float(s_data["max_ttl"])
+			var peak_s: float = float(s_data["peak_scale"])
+			var t_norm: float = 1.0 - (ttl / max_t)
+			# Overshoot curve: rapid pop in first 25% of lifetime, then decay
+			var cur_scale: float = 0.0
+			if t_norm < 0.25:
+				cur_scale = lerpf(0.2, peak_s, t_norm / 0.25)
+			else:
+				cur_scale = lerpf(peak_s, 0.02, (t_norm - 0.25) / 0.75)
+			s_node.scale = Vector3.ONE * cur_scale
+			var r: float = float(s_data["rot"]) + 16.0 * dt
+			s_data["rot"] = r
+			s_node.rotation_degrees = Vector3(58.0, 0.0, r * 57.2958)
+			s_data["ttl"] = ttl
+		star_idx -= 1
+
+	# 3. Update sparks
+	var sp_idx: int = active_sparks.size() - 1
+	while sp_idx >= 0:
+		var sp_item: Dictionary = active_sparks[sp_idx]
+		var sp_node: MeshInstance3D = sp_item["node"]
+		var sp_vel: Vector3 = sp_item["vel"]
+		var sp_ttl: float = float(sp_item["ttl"]) - dt
+		if sp_ttl <= 0.0:
+			sp_node.visible = false
+			spark_pool.append(sp_node)
+			active_sparks.remove_at(sp_idx)
+		else:
+			sp_vel.y -= 18.0 * dt
+			sp_node.position += sp_vel * dt
+			var max_sp_ttl: float = float(sp_item["max_ttl"])
+			var shrink: float = clampf(sp_ttl / max_sp_ttl, 0.05, 1.0)
+			sp_node.scale = Vector3.ONE * shrink
+			sp_item["vel"] = sp_vel
+			sp_item["ttl"] = sp_ttl
+		sp_idx -= 1
+
+	# 4. Update dust puffs
+	var d_idx: int = active_dust.size() - 1
+	while d_idx >= 0:
+		var d_item: Dictionary = active_dust[d_idx]
+		var d_node: MeshInstance3D = d_item["node"]
+		var d_vel: Vector3 = d_item["vel"]
+		var d_ttl: float = float(d_item["ttl"]) - dt
+		if d_ttl <= 0.0:
+			d_node.visible = false
+			dust_pool.append(d_node)
+			active_dust.remove_at(d_idx)
+		else:
+			d_node.position += d_vel * dt
+			d_vel.x = lerpf(d_vel.x, 0.0, 4.0 * dt)
+			d_vel.z = lerpf(d_vel.z, 0.0, 4.0 * dt)
+			var max_d_ttl: float = float(d_item["max_ttl"])
+			var t_grow: float = 1.0 - (d_ttl / max_d_ttl)
+			var grow_s: float = lerpf(0.3, 1.35, t_grow)
+			d_node.scale = Vector3.ONE * grow_s
+			d_item["vel"] = d_vel
+			d_item["ttl"] = d_ttl
+		d_idx -= 1
+
+	# 5. Update flying stolen parts (arcing toward hero body)
+	var fly_idx: int = active_flying_parts.size() - 1
+	while fly_idx >= 0:
+		var fp: Dictionary = active_flying_parts[fly_idx]
+		var f_node: Node3D = fp["node"]
+		var prog: float = float(fp["progress"]) + dt / float(fp["duration"])
+		var start_p: Vector3 = fp["start_pos"]
+		var t_node: Node3D = fp["target_node"]
+		var target_p: Vector3 = (t_node.global_position + Vector3(0.0, 1.25, 0.0)) if is_instance_valid(t_node) else start_p
+
+		var t_clamped: float = clampf(prog, 0.0, 1.0)
+		var ease_t: float = t_clamped * t_clamped * (3.0 - 2.0 * t_clamped) # smoothstep
+		var arc_h: float = sin(t_clamped * PI) * 1.85
+		f_node.global_position = start_p.lerp(target_p, ease_t) + Vector3(0.0, arc_h, 0.0)
+		f_node.rotate_y(24.0 * dt)
+		f_node.rotate_z(14.0 * dt)
+
+		var tr_timer: float = float(fp["trail_timer"]) + dt
+		if tr_timer >= 0.045:
+			tr_timer = 0.0
+			spawn_dust_puff(f_node.global_position, 1, 0.15)
+		fp["trail_timer"] = tr_timer
+		fp["progress"] = prog
+
+		if prog >= 1.0:
+			var cb: Callable = fp["on_arrived"]
+			if not cb.is_null():
+				cb.call()
+			spawn_impact_star(Vector2(target_p.x, target_p.z), true)
+			if is_instance_valid(f_node):
+				f_node.queue_free()
+			active_flying_parts.remove_at(fly_idx)
+		fly_idx -= 1
 
 func _spawn_box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material, rot_deg: Vector3 = Vector3.ZERO) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()

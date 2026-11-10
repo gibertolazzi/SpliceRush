@@ -21,6 +21,9 @@ var camera_shake_trauma: float = 0.0
 var kill_cam_timer: float = 0.0
 var kill_cam_focus_xz: Vector2 = Vector2.ZERO
 var hit_stop_active: bool = false
+var _hit_stop_id: int = 0
+var _pending_combatant_slots: Dictionary = {}
+var _flying_parts_in_flight: Dictionary = {}
 var target_ring_mesh: MeshInstance3D
 var _custom_hero_yaw: float = 0.0
 
@@ -34,6 +37,7 @@ var _simulate_input_preview: bool = false
 var _preview_frenzy: bool = false
 var _preview_result: bool = false
 var _preview_clip: bool = false
+var _preview_steal_juice: bool = false
 var _preview_tutorial_phase2: bool = false
 var _preview_tutorial_dismissed: bool = false
 var _preview_customize: bool = false
@@ -49,7 +53,7 @@ func _ready() -> void:
 	_parse_cmdline_args()
 	if _preview_customize:
 		is_customizing = true
-	elif _simulate_input_preview or _preview_frenzy or _preview_last10s or _preview_result or _preview_clip or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1:
+	elif _simulate_input_preview or _preview_frenzy or _preview_last10s or _preview_result or _preview_clip or _preview_steal_juice or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1:
 		is_customizing = false
 	else:
 		is_customizing = true
@@ -72,6 +76,8 @@ func _ready() -> void:
 		server.match_elapsed_sec = balance.match_duration_sec - 0.05
 	if _preview_clip:
 		_stage_viral_clip_moment()
+	elif _preview_steal_juice:
+		_stage_steal_juice_scenario()
 	if _preview_one_leg and not server.combatants.is_empty():
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		p0.slots[PartData.Slot.LEGS] = &"severed_one_leg"
@@ -111,6 +117,8 @@ func _parse_cmdline_args() -> void:
 			_preview_result = true
 		elif arg == "--preview-clip":
 			_preview_clip = true
+		elif arg == "--preview-steal-juice":
+			_preview_steal_juice = true
 		elif arg == "--preview-tutorial-phase2":
 			_preview_tutorial_phase2 = true
 		elif arg == "--preview-tutorial-dismissed":
@@ -159,6 +167,18 @@ func _stage_viral_clip_moment() -> void:
 	p0.slots[PartData.Slot.LEGS] = &"rocket_legs"
 	p0.slots[PartData.Slot.HEAD] = &"laser_eye"
 	server._recalc_combatant_stats(p0, true)
+	if hud != null:
+		hud.intro_tutorial_timer = 0.0
+		hud._intro_elapsed = 6.0
+
+func _stage_steal_juice_scenario() -> void:
+	_stage_viral_clip_moment()
+	if hud != null:
+		hud.intro_tutorial_timer = 0.0
+		hud._intro_elapsed = 6.0
+		hud.show_part_stolen_banner(&"chainsaw_arm", int(PartData.Rarity.EPIC), int(PartData.Slot.ARMS))
+	if arena_builder != null:
+		arena_builder.spawn_impact_star(Vector2(0.0, 4.4), true)
 
 func _setup_environment_and_lights() -> void:
 	var we := WorldEnvironment.new()
@@ -341,15 +361,16 @@ func trigger_hit_stop(duration_sec: float, time_scale_val: float = 0.12) -> void
 	if _screenshot_path != "":
 		# Keep frame capture deterministic during automated screenshot runs
 		return
-	if hit_stop_active:
-		return
+	_hit_stop_id += 1
+	var my_id: int = _hit_stop_id
 	hit_stop_active = true
 	Engine.time_scale = time_scale_val
 	# ignore_time_scale = true (4th parameter) so Engine.time_scale always restores cleanly (game-feel skill)
 	var timer: SceneTreeTimer = get_tree().create_timer(duration_sec, true, false, true)
 	timer.timeout.connect(func() -> void:
-		Engine.time_scale = 1.0
-		hit_stop_active = false
+		if my_id == _hit_stop_id:
+			Engine.time_scale = 1.0
+			hit_stop_active = false
 	)
 
 func trigger_kill_cam(focus_xz: Vector2, duration_sec: float = 0.36) -> void:
@@ -369,10 +390,22 @@ func _on_attack_triggered() -> void:
 	if hud != null and hud.intro_tutorial_timer > 1.2:
 		hud.intro_tutorial_timer = minf(hud.intro_tutorial_timer, 0.8)
 
+func _trigger_dash_juice() -> void:
+	if server == null or server.combatants.is_empty():
+		return
+	var p0: MatchServer.CombatantState = server.combatants[0]
+	if p0.dash_cooldown > 0.1 and p0.dash_timer <= 0.0:
+		return
+	var back_dir: Vector2 = -p0.vel.normalized() if p0.vel.length_squared() > 0.01 else -Vector2(cos(p0.facing_angle), sin(p0.facing_angle))
+	if arena_builder != null:
+		arena_builder.spawn_dash_dust(Vector3(p0.pos.x, 0.0, p0.pos.y), back_dir)
+	camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.12)
+
 func _on_ability_triggered() -> void:
 	_ability_queued = true
 	if sound_controller != null:
 		sound_controller.play_dash_sfx()
+	_trigger_dash_juice()
 	_mark_web_first_input()
 	if hud != null and hud.intro_tutorial_timer > 1.2:
 		hud.intro_tutorial_timer = minf(hud.intro_tutorial_timer, 0.8)
@@ -388,6 +421,7 @@ func _physics_process(_delta: float) -> void:
 		_ability_queued = true
 		if sound_controller != null:
 			sound_controller.play_dash_sfx()
+		_trigger_dash_juice()
 	if combined.length_squared() > 0.001 or _ability_queued or _attack_queued:
 		_mark_web_first_input()
 		if hud != null and hud.intro_tutorial_timer > 1.2 and combined.length_squared() > 0.05:
@@ -488,21 +522,28 @@ func _on_server_state_ticked(time_left: float) -> void:
 		virtual_joystick.dash_max_cooldown = maxf(0.1, balance.dash_cooldown_sec * p0.cooldown_mult)
 
 func _on_server_attack_performed(attacker_id: int, target_id: int, from_xz: Vector2, to_xz: Vector2, _damage: int) -> void:
+	var is_ko: bool = (target_id >= 0 and target_id < server.combatants.size() and not server.combatants[target_id].alive)
+	if arena_builder != null:
+		arena_builder.spawn_impact_star(to_xz, is_ko)
+		arena_builder.spawn_impact_debris(to_xz, 4 if is_ko else 2)
+
 	if attacker_id == 0:
-		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.35)
-		if target_id >= 0 and target_id < server.combatants.size() and not server.combatants[target_id].alive:
-			trigger_hit_stop(0.065, 0.10)
+		if is_ko:
+			camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.52)
+			trigger_hit_stop(0.085, 0.08)
 			trigger_kill_cam(to_xz, 0.36)
 			if sound_controller != null:
 				sound_controller.play_kill_sfx()
 			if hud != null:
-				hud.trigger_impact_speed_lines(0.32)
+				hud.trigger_impact_speed_lines(0.36)
 		else:
-			trigger_hit_stop(0.035, 0.20)
+			camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.28)
+			trigger_hit_stop(0.045, 0.15)
 			if sound_controller != null:
 				sound_controller.play_hit_sfx()
+	elif target_id == 0:
+		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.32)
 
-	arena_builder.spawn_impact_debris(to_xz, 3)
 	if not attack_fx_pool.is_empty():
 		var fx: MeshInstance3D = attack_fx_pool.pop_back()
 		var mid: Vector2 = (from_xz + to_xz) * 0.5
@@ -520,22 +561,58 @@ func _on_server_block_damaged(cell: Vector2i, remaining_hp: int, destroyed: bool
 func _on_server_part_dropped(drop_id: int, part_id: StringName, slot: int, rarity: int, pos_xz: Vector2, is_power: bool) -> void:
 	arena_builder.spawn_dropped_part_visual(drop_id, part_id, slot, rarity, pos_xz, is_power)
 
-func _on_server_part_picked_up(drop_id: int, collector_id: int, part_id: StringName, _slot: int, _rarity: int, pos_xz: Vector2) -> void:
-	arena_builder.remove_dropped_part_visual(drop_id, pos_xz)
-	if collector_id == 0:
-		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.50)
-		trigger_hit_stop(0.14, 0.22)
-		trigger_kill_cam(pos_xz, 0.35)
-		if sound_controller != null:
-			sound_controller.play_steal_stinger()
-		if hud != null:
-			hud.show_part_stolen_toast(part_id)
+func _on_server_part_picked_up(drop_id: int, collector_id: int, part_id: StringName, slot: int, rarity: int, pos_xz: Vector2) -> void:
+	var collector_node: BlockyFighter3D = null
+	if collector_id >= 0 and collector_id < fighter_nodes.size():
+		collector_node = fighter_nodes[collector_id]
+
+	var in_flight: int = int(_flying_parts_in_flight.get(collector_id, 0)) + 1
+	_flying_parts_in_flight[collector_id] = in_flight
+
+	var on_part_arrived := func() -> void:
+		var rem: int = int(_flying_parts_in_flight.get(collector_id, 1)) - 1
+		if rem <= 0:
+			_flying_parts_in_flight.erase(collector_id)
+		else:
+			_flying_parts_in_flight[collector_id] = rem
+
+		if collector_node != null and is_instance_valid(collector_node):
+			if _pending_combatant_slots.has(collector_id):
+				var ps: Dictionary = _pending_combatant_slots[collector_id]
+				collector_node.apply_slots(ps["slots"], ps["abom"], true)
+				_pending_combatant_slots.erase(collector_id)
+			else:
+				collector_node.trigger_transform_pop()
+
+		if collector_id == 0:
+			camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.65)
+			trigger_hit_stop(0.12, 0.05)
+			trigger_kill_cam(pos_xz, 0.35)
+			if sound_controller != null:
+				sound_controller.play_steal_stinger()
+			if hud != null:
+				hud.show_part_stolen_banner(part_id, rarity, slot)
+
+	if collector_node != null and is_instance_valid(collector_node):
+		arena_builder.spawn_flying_part(drop_id, part_id, slot, rarity, pos_xz, collector_node, on_part_arrived)
+	else:
+		arena_builder.remove_dropped_part_visual(drop_id, pos_xz)
+		on_part_arrived.call()
 
 func _on_server_combatant_slots_changed(combatant_id: int, slots: Dictionary, is_abomination: bool, total_mass: int) -> void:
-	if combatant_id >= 0 and combatant_id < fighter_nodes.size():
-		fighter_nodes[combatant_id].apply_slots(slots, is_abomination, true)
 	if combatant_id == 0 and hud != null:
 		hud.on_player_slots_updated(slots, is_abomination, total_mass)
+
+	if _flying_parts_in_flight.has(combatant_id):
+		# Stash pending slots until flying projectile impacts body
+		_pending_combatant_slots[combatant_id] = {
+			"slots": slots.duplicate(),
+			"abom": is_abomination,
+			"mass": total_mass,
+		}
+	else:
+		if combatant_id >= 0 and combatant_id < fighter_nodes.size():
+			fighter_nodes[combatant_id].apply_slots(slots, is_abomination, true)
 
 func _on_server_abomination_changed(combatant_id: int, active: bool, _pos_xz: Vector2) -> void:
 	if active and sound_controller != null:
