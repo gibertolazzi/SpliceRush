@@ -162,7 +162,7 @@ func _setup_camera() -> void:
 	camera.fov = balance.camera_fov_deg
 	camera.near = 0.2
 	camera.far = 95.0
-	camera.position = Vector3(0.0, 10.5, 15.0)
+	camera.position = Vector3(0.0, balance.camera_distance, 15.0)
 	camera.rotation_degrees = Vector3(balance.camera_pitch_deg, 0.0, 0.0)
 	add_child(camera)
 	camera.make_current()
@@ -356,7 +356,7 @@ func _update_camera_follow(dt: float) -> void:
 	var max_cam_z: float = maxf(6.0, safe_b.y - 4.0)
 	var target_x: float = clampf(focus_pos.x * 0.82, -max_cam_x, max_cam_x)
 	var target_z: float = clampf(focus_pos.y + balance.camera_z_bias, -max_cam_z + balance.camera_z_bias, max_cam_z + balance.camera_z_bias)
-	var desired := Vector3(target_x, 10.5, target_z)
+	var desired := Vector3(target_x, balance.camera_distance, target_z)
 	var t: float = 1.0 - exp(-balance.camera_smooth_rate * dt)
 	var base_cam_pos: Vector3 = camera.position.lerp(desired, t)
 

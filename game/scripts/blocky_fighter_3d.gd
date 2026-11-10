@@ -1,6 +1,8 @@
 class_name BlockyFighter3D
 extends Node3D
 
+const HERO_SCENE := preload("res://Rigged_Blocky_Hero/Meshy_AI_Rigged_Blocky_Hero_20261110_animated_mixamo_Walking.fbx")
+const STATUS_SHATTER_VFX := preload("res://StatusFXFree/assets/BinbunVFX_Vol2/StatusFX/effects/status/vfx_status_shatter.tscn")
 const TOON_SHADER := preload("res://game/shaders/character_toon.gdshader")
 const OUTLINE_SHADER := preload("res://game/shaders/character_outline.gdshader")
 
@@ -12,23 +14,40 @@ var is_abomination: bool = false
 var current_slots: Dictionary = {}
 
 var pivot: Node3D
-var torso_mesh: MeshInstance3D
+var hero_instance: Node3D
+var skeleton: Skeleton3D
+var anim_player: AnimationPlayer
+var char_mesh: MeshInstance3D
+
 var head_socket: Node3D
 var left_arm_socket: Node3D
 var right_arm_socket: Node3D
 var left_leg_socket: Node3D
 var right_leg_socket: Node3D
 var core_socket: Node3D
+
 var player_cursor_ring: Node3D
 var rocket_flame: MeshInstance3D
 var bot_indicator_root: Node3D
 var abomination_marker_root: Node3D
 var abomination_ring: MeshInstance3D
 
+var _bone_head: int = -1
+var _bone_left_arm: int = -1
+var _bone_right_arm: int = -1
+var _bone_left_forearm: int = -1
+var _bone_right_forearm: int = -1
+var _bone_left_hand: int = -1
+var _bone_right_hand: int = -1
+var _bone_left_upleg: int = -1
+var _bone_right_upleg: int = -1
+var _bone_left_leg: int = -1
+var _bone_right_leg: int = -1
+var _bone_left_foot: int = -1
+var _bone_right_foot: int = -1
+
 var _walk_phase: float = 0.0
 var _transform_flash_timer: float = 0.0
-var _body_mat: ShaderMaterial
-var _skin_mat: ShaderMaterial
 
 static var _shared_outline_mat: ShaderMaterial
 static var _shared_dark_mat: ShaderMaterial
@@ -99,6 +118,12 @@ static func _ensure_shared_materials() -> void:
 		_shared_player_ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		_shared_player_ring_mat.albedo_color = Color(0.20, 0.95, 1.0)
 
+func _make_unshaded_mat(col: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = col
+	return mat
+
 func _make_toon_mat(col: Color, emission_boost: float = 0.06) -> ShaderMaterial:
 	_ensure_shared_materials()
 	var mat := ShaderMaterial.new()
@@ -106,12 +131,6 @@ func _make_toon_mat(col: Color, emission_boost: float = 0.06) -> ShaderMaterial:
 	mat.set_shader_parameter("base_color", col)
 	mat.set_shader_parameter("emission_boost", emission_boost)
 	mat.next_pass = _shared_outline_mat
-	return mat
-
-func _make_unshaded_mat(col: Color) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = col
 	return mat
 
 func _add_box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material, rot_deg: Vector3 = Vector3.ZERO) -> MeshInstance3D:
@@ -131,6 +150,28 @@ func _clear_socket(socket: Node3D) -> void:
 	for child: Node in socket.get_children():
 		child.free()
 
+func _set_bone_scale(bone_idx: int, s: Vector3) -> void:
+	if skeleton != null and bone_idx >= 0 and bone_idx < skeleton.get_bone_count():
+		skeleton.set_bone_pose_scale(bone_idx, s)
+
+func play_shatter_vfx(local_pos: Vector3) -> void:
+	if STATUS_SHATTER_VFX == null or not is_inside_tree():
+		return
+	var tree := get_tree()
+	if tree == null:
+		return
+	var vfx: Node3D = STATUS_SHATTER_VFX.instantiate() as Node3D
+	vfx.position = local_pos
+	pivot.add_child(vfx)
+	var ap: AnimationPlayer = vfx.find_child("AnimationPlayer", true, false) as AnimationPlayer
+	if ap != null and ap.has_animation("open"):
+		ap.play("open")
+	var t: SceneTreeTimer = tree.create_timer(0.75, true, false, true)
+	t.timeout.connect(func() -> void:
+		if is_instance_valid(vfx):
+			vfx.queue_free()
+	)
+
 func _build_base_skeleton() -> void:
 	for child: Node in get_children():
 		child.free()
@@ -138,10 +179,6 @@ func _build_base_skeleton() -> void:
 	pivot = Node3D.new()
 	pivot.name = "Pivot"
 	add_child(pivot)
-
-	_body_mat = _make_toon_mat(base_color, 0.04)
-	var skin_col: Color = Color(0.88, 0.75, 0.65) if fighter_id == 0 else base_color.lightened(0.10)
-	_skin_mat = _make_toon_mat(skin_col, 0.02)
 
 	# Ground blob shadow
 	_add_box(self, Vector3(1.10, 0.02, 1.10), Vector3(0.0, 0.02, 0.0), _shared_shadow_mat)
@@ -184,39 +221,72 @@ func _build_base_skeleton() -> void:
 	var base_s: float = _get_target_base_scale()
 	pivot.scale = Vector3.ONE * base_s
 
-	# Torso & Pelvis
-	torso_mesh = _add_box(pivot, Vector3(0.82, 0.88, 0.52), Vector3(0.0, 1.05, 0.0), _body_mat)
-	_add_box(pivot, Vector3(0.80, 0.28, 0.50), Vector3(0.0, 0.58, 0.0), _shared_dark_mat)
+	# Instantiate the authentic Rigged Blocky Hero FBX model
+	hero_instance = HERO_SCENE.instantiate() as Node3D
+	hero_instance.name = "HeroModel"
+	pivot.add_child(hero_instance)
 
-	# Sockets strictly aligned to character axes (+Z = Forward, +Y = Up, +X = Right, -X = Left)
+	skeleton = hero_instance.find_child("Skeleton3D", true, false) as Skeleton3D
+	anim_player = hero_instance.find_child("AnimationPlayer", true, false) as AnimationPlayer
+	char_mesh = hero_instance.find_child("char1", true, false) as MeshInstance3D
+
+	# Tint bot materials or preserve pure crisp original texture for player
+	if char_mesh != null and char_mesh.mesh != null and char_mesh.mesh.get_surface_count() > 0:
+		var orig_mat = char_mesh.mesh.surface_get_material(0)
+		if orig_mat != null:
+			var mat: StandardMaterial3D = orig_mat.duplicate() as StandardMaterial3D
+			if fighter_id == 0:
+				mat.albedo_color = Color.WHITE
+			else:
+				# Tint bot body with its assigned fighter palette color
+				mat.albedo_color = base_color.lightened(0.25)
+			char_mesh.set_surface_override_material(0, mat)
+
+	if skeleton != null:
+		_bone_head = skeleton.find_bone("Head")
+		_bone_left_arm = skeleton.find_bone("LeftArm")
+		_bone_right_arm = skeleton.find_bone("RightArm")
+		_bone_left_forearm = skeleton.find_bone("LeftForeArm")
+		_bone_right_forearm = skeleton.find_bone("RightForeArm")
+		_bone_left_hand = skeleton.find_bone("LeftHand")
+		_bone_right_hand = skeleton.find_bone("RightHand")
+		_bone_left_upleg = skeleton.find_bone("LeftUpLeg")
+		_bone_right_upleg = skeleton.find_bone("RightUpLeg")
+		_bone_left_leg = skeleton.find_bone("LeftLeg")
+		_bone_right_leg = skeleton.find_bone("RightLeg")
+		_bone_left_foot = skeleton.find_bone("LeftFoot")
+		_bone_right_foot = skeleton.find_bone("RightFoot")
+
+	# Sockets positioned precisely on character axes (+Z = Forward, +Y = Up, +X = Left, -X = Right)
 	head_socket = Node3D.new()
 	head_socket.name = "HeadSocket"
-	head_socket.position = Vector3(0.0, 1.82, 0.0)
+	head_socket.position = Vector3(0.0, 1.54, 0.0)
 	pivot.add_child(head_socket)
 
+	# In skeleton coordinates, LeftArm is at +X and RightArm is at -X
 	left_arm_socket = Node3D.new()
 	left_arm_socket.name = "LeftArmSocket"
-	left_arm_socket.position = Vector3(-0.58, 1.25, 0.0)
+	left_arm_socket.position = Vector3(0.38, 1.25, 0.0)
 	pivot.add_child(left_arm_socket)
 
 	right_arm_socket = Node3D.new()
 	right_arm_socket.name = "RightArmSocket"
-	right_arm_socket.position = Vector3(0.58, 1.25, 0.0)
+	right_arm_socket.position = Vector3(-0.38, 1.25, 0.0)
 	pivot.add_child(right_arm_socket)
 
 	left_leg_socket = Node3D.new()
 	left_leg_socket.name = "LeftLegSocket"
-	left_leg_socket.position = Vector3(-0.24, 0.50, 0.0)
+	left_leg_socket.position = Vector3(0.16, 0.50, 0.0)
 	pivot.add_child(left_leg_socket)
 
 	right_leg_socket = Node3D.new()
 	right_leg_socket.name = "RightLegSocket"
-	right_leg_socket.position = Vector3(0.24, 0.50, 0.0)
+	right_leg_socket.position = Vector3(-0.16, 0.50, 0.0)
 	pivot.add_child(right_leg_socket)
 
 	core_socket = Node3D.new()
 	core_socket.name = "CoreSocket"
-	core_socket.position = Vector3(0.0, 1.08, 0.28)
+	core_socket.position = Vector3(0.0, 1.15, 0.22)
 	pivot.add_child(core_socket)
 
 	# Bot indicator shape overhead (Rule 5 & Rule 9)
@@ -288,39 +358,23 @@ func _get_target_base_scale() -> float:
 
 func _populate_head_socket(part_id: StringName) -> void:
 	_clear_socket(head_socket)
-	var head_col: Color = Color(0.88, 0.75, 0.65) if fighter_id == 0 else base_color.lightened(0.08)
-	var head_mat: ShaderMaterial = _make_toon_mat(head_col, 0.03)
-
-	# Clean Head Cube
-	_add_box(head_socket, Vector3(0.74, 0.74, 0.70), Vector3.ZERO, head_mat)
-
-	# Hair cap / helmet base
-	var hair_mat: ShaderMaterial = _shared_dark_mat
-	if fighter_id == 0:
-		_add_box(head_socket, Vector3(0.76, 0.24, 0.72), Vector3(0.0, 0.28, 0.0), hair_mat)
 
 	match part_id:
 		&"laser_eye":
-			# Sleek Cyber mono-visor with red laser lens on face (+Z)
-			_add_box(head_socket, Vector3(0.48, 0.18, 0.12), Vector3(0.0, 0.06, 0.36), _shared_dark_mat)
-			_add_box(head_socket, Vector3(0.24, 0.12, 0.14), Vector3(0.0, 0.06, 0.38), _shared_red_eye_mat)
+			# Sleek Cyber mono-visor with red laser lens on eye level (+Z face)
+			_add_box(head_socket, Vector3(0.36, 0.12, 0.10), Vector3(0.0, 0.16, 0.22), _shared_dark_mat)
+			_add_box(head_socket, Vector3(0.18, 0.06, 0.12), Vector3(0.0, 0.16, 0.23), _shared_red_eye_mat)
 		&"visor_head":
-			# Sleek dark cyber sunglasses with cyan trim on face (+Z)
-			_add_box(head_socket, Vector3(0.68, 0.20, 0.10), Vector3(0.0, 0.08, 0.36), _shared_dark_mat)
-			_add_box(head_socket, Vector3(0.60, 0.08, 0.12), Vector3(0.0, 0.08, 0.37), _shared_cyan_mat)
+			# Sleek dark cyber sunglasses with cyan trim on eye level (+Z face)
+			_add_box(head_socket, Vector3(0.38, 0.12, 0.10), Vector3(0.0, 0.16, 0.22), _shared_dark_mat)
+			_add_box(head_socket, Vector3(0.32, 0.05, 0.12), Vector3(0.0, 0.16, 0.23), _shared_cyan_mat)
 		&"spike_helm":
 			# Spiked red mohawk crest on top of head
 			var crest_mat: ShaderMaterial = _make_toon_mat(Color(0.95, 0.16, 0.24), 0.12)
-			_add_box(head_socket, Vector3(0.18, 0.36, 0.65), Vector3(0.0, 0.46, 0.0), crest_mat)
-			# Eyes on front
-			_add_box(head_socket, Vector3(0.14, 0.12, 0.08), Vector3(-0.16, 0.06, 0.36), _shared_white_mat)
-			_add_box(head_socket, Vector3(0.14, 0.12, 0.08), Vector3(0.16, 0.06, 0.36), _shared_white_mat)
+			_add_box(head_socket, Vector3(0.16, 0.32, 0.46), Vector3(0.0, 0.44, 0.0), crest_mat)
 		_:
-			# Clean expressive brawler eyes on face (+Z)
-			_add_box(head_socket, Vector3(0.16, 0.14, 0.08), Vector3(-0.16, 0.06, 0.36), _shared_white_mat)
-			_add_box(head_socket, Vector3(0.16, 0.14, 0.08), Vector3(0.16, 0.06, 0.36), _shared_white_mat)
-			_add_box(head_socket, Vector3(0.08, 0.08, 0.09), Vector3(-0.16, 0.06, 0.38), _shared_dark_mat)
-			_add_box(head_socket, Vector3(0.08, 0.08, 0.09), Vector3(0.16, 0.06, 0.38), _shared_dark_mat)
+			# Default: show the natural expressive head of the 3D model!
+			pass
 
 func _populate_arm_sockets(part_id: StringName) -> void:
 	_clear_socket(left_arm_socket)
@@ -328,6 +382,14 @@ func _populate_arm_sockets(part_id: StringName) -> void:
 
 	match part_id:
 		&"severed_arms":
+			# Hide skinned hero arms
+			_set_bone_scale(_bone_left_arm, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_right_arm, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_left_forearm, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_right_forearm, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_left_hand, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_right_hand, Vector3(0.001, 0.001, 0.001))
+
 			# Severed Arm Stumps: dark mechanical bone sockets with raw sparking ends
 			var socket_mat: ShaderMaterial = _shared_dark_mat
 			var spark_mat: StandardMaterial3D = _make_unshaded_mat(Color(1.0, 0.25, 0.20))
@@ -335,44 +397,56 @@ func _populate_arm_sockets(part_id: StringName) -> void:
 			_add_box(left_arm_socket, Vector3(0.16, 0.08, 0.16), Vector3(0.0, -0.22, 0.0), spark_mat)
 			_add_box(right_arm_socket, Vector3(0.24, 0.22, 0.24), Vector3(0.0, -0.09, 0.0), socket_mat)
 			_add_box(right_arm_socket, Vector3(0.16, 0.08, 0.16), Vector3(0.0, -0.22, 0.0), spark_mat)
+			play_shatter_vfx(left_arm_socket.position)
+			play_shatter_vfx(right_arm_socket.position)
+
 		&"chainsaw_arm":
-			# Left Arm: Muscular brawler fist with dark wristband (matches key-art protagonist!)
-			_add_box(left_arm_socket, Vector3(0.36, 0.44, 0.36), Vector3(0.0, -0.18, 0.0), _skin_mat)
-			_add_box(left_arm_socket, Vector3(0.42, 0.14, 0.42), Vector3(0.0, -0.38, 0.0), _shared_dark_mat)
-			_add_box(left_arm_socket, Vector3(0.52, 0.46, 0.52), Vector3(0.0, -0.60, 0.0), _skin_mat)
-			# Right Arm: Mechanical Chainsaw Arm extending forward (+Z)
+			# Left Arm: show natural muscular arm from 3D model with spiked wristband
+			_set_bone_scale(_bone_left_arm, Vector3.ONE)
+			_set_bone_scale(_bone_left_forearm, Vector3.ONE)
+			_set_bone_scale(_bone_left_hand, Vector3.ONE)
+			_add_box(left_arm_socket, Vector3(0.26, 0.14, 0.26), Vector3(0.0, -0.32, 0.0), _shared_dark_mat)
+
+			# Right Arm: hide skinned arm and equip Mechanical Chainsaw Blade extending forward (+Z)
+			_set_bone_scale(_bone_right_arm, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_right_forearm, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_right_hand, Vector3(0.001, 0.001, 0.001))
+
 			var orange_mat: ShaderMaterial = _make_toon_mat(Color(0.98, 0.44, 0.04), 0.08)
-			var blade_mat: ShaderMaterial = _make_toon_mat(Color(0.82, 0.85, 0.90), 0.06)
-			_add_box(right_arm_socket, Vector3(0.34, 0.45, 0.34), Vector3(0.0, -0.20, 0.0), _shared_dark_mat)
-			_add_box(right_arm_socket, Vector3(0.48, 0.48, 0.60), Vector3(0.0, -0.48, 0.14), orange_mat)
-			var blade: MeshInstance3D = _add_box(right_arm_socket, Vector3(0.12, 0.34, 1.10), Vector3(0.0, -0.48, 0.78), blade_mat)
-			# Clean blade teeth along top and bottom
+			var blade_mat: ShaderMaterial = _make_toon_mat(Color(0.85, 0.88, 0.92), 0.06)
+			_add_box(right_arm_socket, Vector3(0.30, 0.32, 0.42), Vector3(0.0, -0.20, 0.20), orange_mat)
+			var blade: MeshInstance3D = _add_box(right_arm_socket, Vector3(0.08, 0.28, 0.95), Vector3(0.0, -0.20, 0.85), blade_mat)
 			for t_i: int in range(3):
-				var tz: float = -0.30 + float(t_i) * 0.30
-				_add_box(blade, Vector3(0.14, 0.08, 0.10), Vector3(0.0, 0.18, tz), _shared_dark_mat)
-				_add_box(blade, Vector3(0.14, 0.08, 0.10), Vector3(0.0, -0.18, tz), _shared_dark_mat)
-		&"giant_fist":
-			# Heavyweight muscular fists on both sides
-			_add_box(left_arm_socket, Vector3(0.38, 0.48, 0.38), Vector3(0.0, -0.20, 0.0), _skin_mat)
-			_add_box(left_arm_socket, Vector3(0.58, 0.54, 0.58), Vector3(0.0, -0.56, 0.0), _skin_mat)
-			_add_box(right_arm_socket, Vector3(0.38, 0.48, 0.38), Vector3(0.0, -0.20, 0.0), _skin_mat)
-			_add_box(right_arm_socket, Vector3(0.58, 0.54, 0.58), Vector3(0.0, -0.56, 0.0), _skin_mat)
+				var tz: float = -0.25 + float(t_i) * 0.25
+				_add_box(blade, Vector3(0.10, 0.06, 0.08), Vector3(0.0, 0.15, tz), _shared_dark_mat)
+				_add_box(blade, Vector3(0.10, 0.06, 0.08), Vector3(0.0, -0.15, tz), _shared_dark_mat)
+
 		&"mega_claws":
+			# Keep arms visible, attach golden power claws to both hands
+			_set_bone_scale(_bone_left_arm, Vector3.ONE)
+			_set_bone_scale(_bone_right_arm, Vector3.ONE)
+			_set_bone_scale(_bone_left_forearm, Vector3.ONE)
+			_set_bone_scale(_bone_right_forearm, Vector3.ONE)
+			_set_bone_scale(_bone_left_hand, Vector3.ONE)
+			_set_bone_scale(_bone_right_hand, Vector3.ONE)
+
 			var claw_mat: ShaderMaterial = _make_toon_mat(Color(1.0, 0.72, 0.14), 0.10)
-			_add_box(left_arm_socket, Vector3(0.34, 0.45, 0.34), Vector3(0.0, -0.20, 0.0), _shared_dark_mat)
-			_add_box(left_arm_socket, Vector3(0.46, 0.44, 0.46), Vector3(0.0, -0.48, 0.0), claw_mat)
-			_add_box(left_arm_socket, Vector3(0.10, 0.45, 0.14), Vector3(-0.12, -0.74, 0.10), _shared_magenta_mat)
-			_add_box(left_arm_socket, Vector3(0.10, 0.45, 0.14), Vector3(0.12, -0.74, 0.10), _shared_magenta_mat)
-			_add_box(right_arm_socket, Vector3(0.34, 0.45, 0.34), Vector3(0.0, -0.20, 0.0), _shared_dark_mat)
-			_add_box(right_arm_socket, Vector3(0.46, 0.44, 0.46), Vector3(0.0, -0.48, 0.0), claw_mat)
-			_add_box(right_arm_socket, Vector3(0.10, 0.45, 0.14), Vector3(-0.12, -0.74, 0.10), _shared_magenta_mat)
-			_add_box(right_arm_socket, Vector3(0.10, 0.45, 0.14), Vector3(0.12, -0.74, 0.10), _shared_magenta_mat)
+			_add_box(left_arm_socket, Vector3(0.32, 0.32, 0.32), Vector3(0.0, -0.45, 0.0), claw_mat)
+			_add_box(left_arm_socket, Vector3(0.08, 0.36, 0.12), Vector3(-0.10, -0.68, 0.08), _shared_magenta_mat)
+			_add_box(left_arm_socket, Vector3(0.08, 0.36, 0.12), Vector3(0.10, -0.68, 0.08), _shared_magenta_mat)
+
+			_add_box(right_arm_socket, Vector3(0.32, 0.32, 0.32), Vector3(0.0, -0.45, 0.0), claw_mat)
+			_add_box(right_arm_socket, Vector3(0.08, 0.36, 0.12), Vector3(-0.10, -0.68, 0.08), _shared_magenta_mat)
+			_add_box(right_arm_socket, Vector3(0.08, 0.36, 0.12), Vector3(0.10, -0.68, 0.08), _shared_magenta_mat)
+
 		_:
-			# Clean base brawler arms
-			_add_box(left_arm_socket, Vector3(0.32, 0.48, 0.32), Vector3(0.0, -0.20, 0.0), _body_mat)
-			_add_box(left_arm_socket, Vector3(0.44, 0.44, 0.44), Vector3(0.0, -0.52, 0.0), _skin_mat)
-			_add_box(right_arm_socket, Vector3(0.32, 0.48, 0.32), Vector3(0.0, -0.20, 0.0), _body_mat)
-			_add_box(right_arm_socket, Vector3(0.44, 0.44, 0.44), Vector3(0.0, -0.52, 0.0), _skin_mat)
+			# Default: show the natural muscular arms of the 3D model!
+			_set_bone_scale(_bone_left_arm, Vector3.ONE)
+			_set_bone_scale(_bone_right_arm, Vector3.ONE)
+			_set_bone_scale(_bone_left_forearm, Vector3.ONE)
+			_set_bone_scale(_bone_right_forearm, Vector3.ONE)
+			_set_bone_scale(_bone_left_hand, Vector3.ONE)
+			_set_bone_scale(_bone_right_hand, Vector3.ONE)
 
 func _populate_leg_sockets(part_id: StringName) -> void:
 	_clear_socket(left_leg_socket)
@@ -381,6 +455,14 @@ func _populate_leg_sockets(part_id: StringName) -> void:
 
 	match part_id:
 		&"severed_legs":
+			# Hide skinned hero legs
+			_set_bone_scale(_bone_left_upleg, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_right_upleg, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_left_leg, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_right_leg, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_left_foot, Vector3(0.001, 0.001, 0.001))
+			_set_bone_scale(_bone_right_foot, Vector3(0.001, 0.001, 0.001))
+
 			# Severed Leg Stumps: short mechanical pegs with warning hazard accents
 			var peg_mat: ShaderMaterial = _shared_dark_mat
 			var warning_mat: StandardMaterial3D = _make_unshaded_mat(Color(1.0, 0.25, 0.20))
@@ -388,61 +470,63 @@ func _populate_leg_sockets(part_id: StringName) -> void:
 			_add_box(left_leg_socket, Vector3(0.14, 0.06, 0.14), Vector3(0.0, -0.19, 0.0), warning_mat)
 			_add_box(right_leg_socket, Vector3(0.20, 0.20, 0.20), Vector3(0.0, -0.08, 0.0), peg_mat)
 			_add_box(right_leg_socket, Vector3(0.14, 0.06, 0.14), Vector3(0.0, -0.19, 0.0), warning_mat)
-		&"rocket_legs":
-			var red_mat: ShaderMaterial = _make_toon_mat(Color(0.88, 0.12, 0.16), 0.08)
-			var white_mat: ShaderMaterial = _make_toon_mat(Color(0.94, 0.94, 0.98), 0.06)
-			# Left thruster boot
-			_add_box(left_leg_socket, Vector3(0.42, 0.28, 0.42), Vector3(0.0, -0.14, 0.0), red_mat)
-			_add_box(left_leg_socket, Vector3(0.44, 0.24, 0.44), Vector3(0.0, -0.34, 0.0), white_mat)
-			_add_box(left_leg_socket, Vector3(0.46, 0.22, 0.46), Vector3(0.0, -0.52, 0.0), red_mat)
-			# Right thruster boot with flame
-			_add_box(right_leg_socket, Vector3(0.42, 0.28, 0.42), Vector3(0.0, -0.14, 0.0), red_mat)
-			_add_box(right_leg_socket, Vector3(0.44, 0.24, 0.44), Vector3(0.0, -0.34, 0.0), white_mat)
-			_add_box(right_leg_socket, Vector3(0.46, 0.22, 0.46), Vector3(0.0, -0.52, 0.0), red_mat)
-			rocket_flame = _add_box(right_leg_socket, Vector3(0.32, 0.55, 0.32), Vector3(0.0, -0.85, 0.0), _make_unshaded_mat(Color(1.0, 0.58, 0.10)))
-			_add_box(right_leg_socket, Vector3(0.18, 0.35, 0.18), Vector3(0.0, -0.75, 0.0), _shared_gold_mat)
+			play_shatter_vfx(left_leg_socket.position)
+			play_shatter_vfx(right_leg_socket.position)
+
 		&"spring_legs":
-			_add_box(left_leg_socket, Vector3(0.26, 0.28, 0.26), Vector3(0.0, -0.14, 0.0), _shared_cyan_mat)
-			_add_box(left_leg_socket, Vector3(0.36, 0.18, 0.42), Vector3(0.0, -0.42, 0.04), _shared_gold_mat)
-			_add_box(right_leg_socket, Vector3(0.26, 0.28, 0.26), Vector3(0.0, -0.14, 0.0), _shared_cyan_mat)
-			_add_box(right_leg_socket, Vector3(0.36, 0.18, 0.42), Vector3(0.0, -0.42, 0.04), _shared_gold_mat)
+			_set_bone_scale(_bone_left_upleg, Vector3.ONE)
+			_set_bone_scale(_bone_right_upleg, Vector3.ONE)
+			_set_bone_scale(_bone_left_leg, Vector3.ONE)
+			_set_bone_scale(_bone_right_leg, Vector3.ONE)
+			_set_bone_scale(_bone_left_foot, Vector3.ONE)
+			_set_bone_scale(_bone_right_foot, Vector3.ONE)
+			_add_box(left_leg_socket, Vector3(0.24, 0.22, 0.24), Vector3(0.0, -0.42, 0.0), _shared_cyan_mat)
+			_add_box(right_leg_socket, Vector3(0.24, 0.22, 0.24), Vector3(0.0, -0.42, 0.0), _shared_cyan_mat)
+
 		&"roller_wheels":
-			_add_box(left_leg_socket, Vector3(0.30, 0.35, 0.32), Vector3(0.0, -0.18, 0.0), _shared_dark_mat)
-			_add_box(left_leg_socket, Vector3(0.44, 0.24, 0.48), Vector3(0.0, -0.44, 0.0), _shared_magenta_mat)
-			_add_box(right_leg_socket, Vector3(0.30, 0.35, 0.32), Vector3(0.0, -0.18, 0.0), _shared_dark_mat)
-			_add_box(right_leg_socket, Vector3(0.44, 0.24, 0.48), Vector3(0.0, -0.44, 0.0), _shared_magenta_mat)
+			_set_bone_scale(_bone_left_upleg, Vector3.ONE)
+			_set_bone_scale(_bone_right_upleg, Vector3.ONE)
+			_set_bone_scale(_bone_left_leg, Vector3.ONE)
+			_set_bone_scale(_bone_right_leg, Vector3.ONE)
+			_set_bone_scale(_bone_left_foot, Vector3.ONE)
+			_set_bone_scale(_bone_right_foot, Vector3.ONE)
+			_add_box(left_leg_socket, Vector3(0.36, 0.18, 0.44), Vector3(0.0, -0.44, 0.0), _shared_magenta_mat)
+			_add_box(right_leg_socket, Vector3(0.36, 0.18, 0.44), Vector3(0.0, -0.44, 0.0), _shared_magenta_mat)
+
 		_:
-			# Clean dark combat boots
-			_add_box(left_leg_socket, Vector3(0.30, 0.45, 0.34), Vector3(0.0, -0.22, 0.0), _shared_dark_mat)
-			_add_box(left_leg_socket, Vector3(0.34, 0.22, 0.44), Vector3(0.0, -0.44, 0.04), _shared_dark_mat)
-			_add_box(right_leg_socket, Vector3(0.30, 0.45, 0.34), Vector3(0.0, -0.22, 0.0), _shared_dark_mat)
-			_add_box(right_leg_socket, Vector3(0.34, 0.22, 0.44), Vector3(0.0, -0.44, 0.04), _shared_dark_mat)
+			# Default: show the natural rocket boots of the 3D model!
+			_set_bone_scale(_bone_left_upleg, Vector3.ONE)
+			_set_bone_scale(_bone_right_upleg, Vector3.ONE)
+			_set_bone_scale(_bone_left_leg, Vector3.ONE)
+			_set_bone_scale(_bone_right_leg, Vector3.ONE)
+			_set_bone_scale(_bone_left_foot, Vector3.ONE)
+			_set_bone_scale(_bone_right_foot, Vector3.ONE)
+
+			# Rocket flame at heel
+			rocket_flame = _add_box(right_leg_socket, Vector3(0.24, 0.42, 0.24), Vector3(0.0, -0.45, -0.15), _make_unshaded_mat(Color(1.0, 0.58, 0.10)))
+			_add_box(rocket_flame, Vector3(0.14, 0.25, 0.14), Vector3(0.0, -0.05, 0.0), _shared_gold_mat)
+			rocket_flame.visible = false
 
 func _populate_core_socket(part_id: StringName) -> void:
 	_clear_socket(core_socket)
+
 	match part_id:
-		&"crown_core":
-			# Golden Crown Emblem badge on chest
-			_add_box(core_socket, Vector3(0.44, 0.22, 0.08), Vector3(0.0, -0.04, 0.0), _shared_gold_mat)
-			_add_box(core_socket, Vector3(0.10, 0.16, 0.09), Vector3(-0.14, 0.10, 0.0), _shared_gold_mat)
-			_add_box(core_socket, Vector3(0.12, 0.20, 0.09), Vector3(0.0, 0.12, 0.0), _shared_gold_mat)
-			_add_box(core_socket, Vector3(0.10, 0.16, 0.09), Vector3(0.14, 0.10, 0.0), _shared_gold_mat)
 		&"shield_core":
-			_add_box(core_socket, Vector3(0.46, 0.46, 0.10), Vector3.ZERO, _shared_cyan_mat)
-			_add_box(core_socket, Vector3(0.26, 0.26, 0.12), Vector3.ZERO, _shared_white_mat)
+			_add_box(core_socket, Vector3(0.42, 0.42, 0.08), Vector3.ZERO, _shared_cyan_mat)
+			_add_box(core_socket, Vector3(0.22, 0.22, 0.10), Vector3.ZERO, _shared_white_mat)
 		&"magnet_core":
-			_add_box(core_socket, Vector3(0.46, 0.40, 0.10), Vector3.ZERO, _shared_magenta_mat)
-			_add_box(core_socket, Vector3(0.14, 0.20, 0.12), Vector3(-0.14, 0.12, 0.0), _shared_gold_mat)
-			_add_box(core_socket, Vector3(0.14, 0.20, 0.12), Vector3(0.14, 0.12, 0.0), _shared_gold_mat)
+			_add_box(core_socket, Vector3(0.42, 0.36, 0.08), Vector3.ZERO, _shared_magenta_mat)
+			_add_box(core_socket, Vector3(0.12, 0.18, 0.10), Vector3(-0.12, 0.08, 0.0), _shared_gold_mat)
+			_add_box(core_socket, Vector3(0.12, 0.18, 0.10), Vector3(0.12, 0.08, 0.0), _shared_gold_mat)
+		&"crown_core":
+			# 3D Golden Crown on chest
+			_add_box(core_socket, Vector3(0.40, 0.18, 0.06), Vector3(0.0, -0.04, 0.0), _shared_gold_mat)
+			_add_box(core_socket, Vector3(0.08, 0.14, 0.07), Vector3(-0.12, 0.08, 0.0), _shared_gold_mat)
+			_add_box(core_socket, Vector3(0.09, 0.18, 0.07), Vector3(0.0, 0.10, 0.0), _shared_gold_mat)
+			_add_box(core_socket, Vector3(0.08, 0.14, 0.07), Vector3(0.12, 0.08, 0.0), _shared_gold_mat)
 		_:
-			if fighter_id == 0:
-				# Crown logo for player
-				_add_box(core_socket, Vector3(0.42, 0.20, 0.08), Vector3(0.0, -0.04, 0.0), _shared_gold_mat)
-				_add_box(core_socket, Vector3(0.10, 0.14, 0.09), Vector3(-0.12, 0.08, 0.0), _shared_gold_mat)
-				_add_box(core_socket, Vector3(0.10, 0.18, 0.09), Vector3(0.0, 0.10, 0.0), _shared_gold_mat)
-				_add_box(core_socket, Vector3(0.10, 0.14, 0.09), Vector3(0.12, 0.08, 0.0), _shared_gold_mat)
-			else:
-				_add_box(core_socket, Vector3(0.32, 0.32, 0.08), Vector3.ZERO, _make_toon_mat(base_color.lightened(0.25), 0.06))
+			# Default: the model's torso already displays the royal shirt and gold crown!
+			pass
 
 func update_visual_state(
 	interp_xz: Vector2,
@@ -460,19 +544,15 @@ func update_visual_state(
 	global_position = Vector3(interp_xz.x, 0.0, interp_xz.y)
 
 	if ko_tumble_active and not alive:
-		pivot.position.y = 0.72
-		pivot.rotation_degrees = Vector3(-24.0, 22.0, 26.0)
-		left_arm_socket.rotation_degrees.z = -55.0
-		right_arm_socket.rotation_degrees.z = 55.0
-		left_leg_socket.rotation_degrees.x = -35.0
-		right_leg_socket.rotation_degrees.x = 25.0
+		pivot.position.y = 0.50
+		pivot.rotation_degrees = Vector3(-35.0, 22.0, 45.0)
+		if anim_player != null and anim_player.is_playing():
+			anim_player.pause()
 		return
 
-	# Reset upright stance
+	# Upright stance
 	pivot.rotation_degrees.x = 0.0
 	pivot.rotation_degrees.z = 0.0
-	left_arm_socket.rotation_degrees.z = 0.0
-	right_arm_socket.rotation_degrees.z = 0.0
 
 	# Smooth character rotation to face movement / target direction
 	var target_yaw: float = -facing_rad + PI * 0.5
@@ -484,37 +564,38 @@ func update_visual_state(
 	var speed: float = vel_xz.length()
 	var is_moving: bool = speed > 0.15
 
+	# Drive Mixamo skeletal walk animation
+	if anim_player != null:
+		if is_moving:
+			if not anim_player.is_playing():
+				anim_player.play("Armature|Armature|Armature|Armature|walking_man|baselayer")
+			anim_player.speed_scale = clampf(speed / 3.2, 0.75, 1.8)
+		else:
+			if anim_player.is_playing():
+				anim_player.pause()
+
+	# Drive attack swing on right arm socket
+	if attack_timer > 0.0:
+		right_arm_socket.rotation_degrees.x = -65.0
+	else:
+		right_arm_socket.rotation_degrees.x = lerpf(right_arm_socket.rotation_degrees.x, 0.0, minf(1.0, 14.0 * dt))
+
+	# Severed legs limping wobble
+	var has_severed_legs: bool = (current_slots.get(PartData.Slot.LEGS) == &"severed_legs")
 	if is_moving:
-		_walk_phase += (3.2 + speed * 1.6) * dt
-		var has_severed_legs: bool = (current_slots.get(PartData.Slot.LEGS) == &"severed_legs")
-		var swing_amp: float = 14.0 if has_severed_legs else 28.0
-		var swing: float = sin(_walk_phase) * clampf(speed / 6.0, 0.25, 1.0) * swing_amp
-		left_leg_socket.rotation_degrees.x = swing
-		right_leg_socket.rotation_degrees.x = -swing
-		left_arm_socket.rotation_degrees.x = -swing * 0.85
-		if attack_timer > 0.0:
-			right_arm_socket.rotation_degrees.x = -65.0
-		else:
-			right_arm_socket.rotation_degrees.x = swing * 0.85
+		_walk_phase += (3.5 + speed * 1.5) * dt
 		if has_severed_legs:
-			pivot.position.y = -0.15 + absf(sin(_walk_phase)) * 0.06
-			pivot.rotation_degrees.z = sin(_walk_phase) * 8.0
+			pivot.position.y = -0.12 + absf(sin(_walk_phase)) * 0.05
+			pivot.rotation_degrees.z = sin(_walk_phase) * 7.0
 		else:
-			pivot.position.y = absf(sin(_walk_phase * 2.0)) * 0.08
+			pivot.position.y = 0.0
 			pivot.rotation_degrees.z = 0.0
 	else:
-		# Return smoothly to idle stance
-		left_leg_socket.rotation_degrees.x = lerpf(left_leg_socket.rotation_degrees.x, 0.0, minf(1.0, 12.0 * dt))
-		right_leg_socket.rotation_degrees.x = lerpf(right_leg_socket.rotation_degrees.x, 0.0, minf(1.0, 12.0 * dt))
-		left_arm_socket.rotation_degrees.x = lerpf(left_arm_socket.rotation_degrees.x, 0.0, minf(1.0, 12.0 * dt))
-		if attack_timer > 0.0:
-			right_arm_socket.rotation_degrees.x = -65.0
-		else:
-			right_arm_socket.rotation_degrees.x = lerpf(right_arm_socket.rotation_degrees.x, 0.0, minf(1.0, 12.0 * dt))
 		pivot.position.y = lerpf(pivot.position.y, 0.0, minf(1.0, 12.0 * dt))
+		pivot.rotation_degrees.z = lerpf(pivot.rotation_degrees.z, 0.0, minf(1.0, 12.0 * dt))
 
 	if rocket_flame != null:
-		if is_moving:
+		if is_moving and not has_severed_legs:
 			var pulse: float = 0.85 + 0.35 * sin(float(Time.get_ticks_msec()) * 0.02)
 			rocket_flame.scale = Vector3(pulse, 0.90 + 0.40 * pulse, pulse)
 			rocket_flame.visible = true
