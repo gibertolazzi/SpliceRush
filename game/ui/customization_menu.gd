@@ -168,15 +168,15 @@ func _draw() -> void:
 	var sub_str: String = tr(&"MENU_DRAG_HINT")
 	draw_string(FONT_REGULAR, Vector2(154.0, 88.0), sub_str, HORIZONTAL_ALIGNMENT_LEFT, sz.x - 175.0, 15, Color(0.82, 0.80, 0.94))
 
-	# 2. ROTATION HINT OVERLAY IN 3D HERO VIEWPORT
-	var rot_hint := "« ↻ »"
-	draw_string(FONT_BOLD, Vector2(sz.x * 0.5 - 40.0, 134.0), rot_hint, HORIZONTAL_ALIGNMENT_CENTER, 80.0, 18, Color(1.0, 0.78, 0.15, 0.75))
-
-	# 3. BOTTOM CUSTOMIZATION PANEL
+	# 2. BOTTOM CUSTOMIZATION PANEL
 	var panel_y: float = clampf(sz.y - 425.0, 510.0, sz.y - 380.0)
 	var panel_h: float = sz.y - panel_y - 10.0
 	var bot_panel := Rect2(14.0, panel_y, sz.x - 28.0, panel_h)
 	_draw_chamfer_box(bot_panel, panel_bg, border_col, 10.0)
+
+	# ROTATION HINT OVERLAY (Discreetly above panel, clear of hero face)
+	var rot_hint := "« ↻ TRASCINA »"
+	draw_string(FONT_BOLD, Vector2(sz.x * 0.5 - 60.0, panel_y - 12.0), rot_hint, HORIZONTAL_ALIGNMENT_CENTER, 120.0, 15, Color(1.0, 0.78, 0.15, 0.65))
 
 	# 4. CATEGORY TABS
 	var tab_names := [tr(&"MENU_TAB_HEAD"), tr(&"MENU_TAB_ARMS"), tr(&"MENU_TAB_LEGS"), tr(&"MENU_TAB_CORE"), tr(&"MENU_TAB_COLOR")]

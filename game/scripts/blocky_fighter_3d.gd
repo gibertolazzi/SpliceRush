@@ -20,6 +20,8 @@ var anim_player: AnimationPlayer
 var char_mesh: MeshInstance3D
 
 var head_socket: Node3D
+var face_root: Node3D
+var face_eyes_root: Node3D
 var left_arm_socket: Node3D
 var right_arm_socket: Node3D
 var left_leg_socket: Node3D
@@ -82,13 +84,17 @@ static func _ensure_shared_materials() -> void:
 	if _shared_outline_mat == null:
 		_shared_outline_mat = ShaderMaterial.new()
 		_shared_outline_mat.shader = OUTLINE_SHADER
-		_shared_outline_mat.set_shader_parameter("outline_color", Color(0.07, 0.04, 0.14, 1.0))
-		_shared_outline_mat.set_shader_parameter("outline_width", 0.036)
+		_shared_outline_mat.set_shader_parameter("outline_color", Color(0.10, 0.06, 0.18, 1.0))
+		_shared_outline_mat.set_shader_parameter("outline_width", 0.024)
 	if _shared_dark_mat == null:
 		_shared_dark_mat = ShaderMaterial.new()
 		_shared_dark_mat.shader = TOON_SHADER
+		_shared_dark_mat.set_shader_parameter("use_texture", false)
 		_shared_dark_mat.set_shader_parameter("base_color", Color(0.14, 0.13, 0.22))
 		_shared_dark_mat.set_shader_parameter("emission_boost", 0.02)
+		_shared_dark_mat.set_shader_parameter("rim_color", Color(0.88, 0.72, 1.0))
+		_shared_dark_mat.set_shader_parameter("rim_power", 2.4)
+		_shared_dark_mat.set_shader_parameter("rim_strength", 0.35)
 		_shared_dark_mat.next_pass = _shared_outline_mat
 	if _shared_shadow_mat == null:
 		_shared_shadow_mat = StandardMaterial3D.new()
@@ -130,8 +136,12 @@ func _make_toon_mat(col: Color, emission_boost: float = 0.06) -> ShaderMaterial:
 	_ensure_shared_materials()
 	var mat := ShaderMaterial.new()
 	mat.shader = TOON_SHADER
+	mat.set_shader_parameter("use_texture", false)
 	mat.set_shader_parameter("base_color", col)
 	mat.set_shader_parameter("emission_boost", emission_boost)
+	mat.set_shader_parameter("rim_color", Color(0.92, 0.78, 1.0))
+	mat.set_shader_parameter("rim_power", 2.2)
+	mat.set_shader_parameter("rim_strength", 0.45)
 	mat.next_pass = _shared_outline_mat
 	return mat
 
@@ -266,17 +276,29 @@ func _build_base_skeleton() -> void:
 	anim_player = hero_instance.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	char_mesh = hero_instance.find_child("char1", true, false) as MeshInstance3D
 
-	# Tint bot materials or preserve pure crisp original texture for player
+	# Apply Toon Shader with texture, skin warmth boost, rim light, and dark outline (Point 9)
 	if char_mesh != null and char_mesh.mesh != null and char_mesh.mesh.get_surface_count() > 0:
 		var orig_mat = char_mesh.mesh.surface_get_material(0)
-		if orig_mat != null:
-			var mat: StandardMaterial3D = orig_mat.duplicate() as StandardMaterial3D
-			if fighter_id == 0:
-				mat.albedo_color = Color.WHITE
-			else:
-				# Tint bot body with vivid, saturated fighter palette color
-				mat.albedo_color = base_color
-			char_mesh.set_surface_override_material(0, mat)
+		var orig_tex: Texture2D = null
+		if orig_mat is StandardMaterial3D and orig_mat.albedo_texture != null:
+			orig_tex = orig_mat.albedo_texture
+		elif orig_mat != null and orig_mat.get("albedo_texture") != null:
+			orig_tex = orig_mat.get("albedo_texture") as Texture2D
+
+		var hero_toon_mat := ShaderMaterial.new()
+		hero_toon_mat.shader = TOON_SHADER
+		hero_toon_mat.set_shader_parameter("use_texture", orig_tex != null)
+		if orig_tex != null:
+			hero_toon_mat.set_shader_parameter("albedo_texture", orig_tex)
+		hero_toon_mat.set_shader_parameter("base_color", Color.WHITE if fighter_id == 0 else base_color)
+		hero_toon_mat.set_shader_parameter("rim_color", Color(0.88, 0.72, 1.0))
+		hero_toon_mat.set_shader_parameter("rim_power", 2.2)
+		hero_toon_mat.set_shader_parameter("rim_strength", 0.48)
+		hero_toon_mat.set_shader_parameter("emission_boost", 0.05)
+		hero_toon_mat.set_shader_parameter("skin_warmth_boost", 0.55)
+		hero_toon_mat.set_shader_parameter("skin_tint", Color(1.15, 0.88, 0.76))
+		hero_toon_mat.next_pass = _shared_outline_mat
+		char_mesh.set_surface_override_material(0, hero_toon_mat)
 
 	if skeleton != null:
 		_bone_head = skeleton.find_bone("Head")
@@ -296,8 +318,17 @@ func _build_base_skeleton() -> void:
 	# Sockets positioned precisely on character axes (+Z = Forward, +Y = Up, +X = Left, -X = Right)
 	head_socket = Node3D.new()
 	head_socket.name = "HeadSocket"
-	head_socket.position = Vector3(0.0, 1.54, 0.0)
+	head_socket.position = Vector3(0.0, 1.625, 0.118)
+	head_socket.rotation_degrees = Vector3(-17.5, 0.0, 0.0)
 	pivot.add_child(head_socket)
+
+	# Expressive Face Root (Point 9: big eyes, eyebrows, expressive mouth)
+	face_root = Node3D.new()
+	face_root.name = "FaceRoot"
+	face_root.position = Vector3(0.0, 1.625, 0.118)
+	face_root.rotation_degrees = Vector3(-17.5, 0.0, 0.0)
+	pivot.add_child(face_root)
+	_build_expressive_face()
 
 	# In skeleton coordinates, LeftArm is at +X and RightArm is at -X
 	left_arm_socket = Node3D.new()
@@ -397,23 +428,82 @@ func _get_target_base_scale() -> float:
 
 func _populate_head_socket(part_id: StringName) -> void:
 	_clear_socket(head_socket)
+	if face_eyes_root != null:
+		face_eyes_root.visible = true
 
 	match part_id:
 		&"laser_eye":
 			# Sleek Cyber mono-visor with red laser lens on eye level (+Z face)
-			_add_box(head_socket, Vector3(0.36, 0.12, 0.10), Vector3(0.0, 0.16, 0.22), _shared_dark_mat)
-			_add_box(head_socket, Vector3(0.18, 0.06, 0.12), Vector3(0.0, 0.16, 0.23), _shared_red_eye_mat)
+			if face_eyes_root != null:
+				face_eyes_root.visible = false
+			_add_box(head_socket, Vector3(0.22, 0.065, 0.04), Vector3(0.0, 0.016, 0.012), _shared_dark_mat)
+			_add_box(head_socket, Vector3(0.12, 0.035, 0.05), Vector3(0.0, 0.016, 0.020), _shared_red_eye_mat)
 		&"visor_head":
 			# Sleek dark cyber sunglasses with cyan trim on eye level (+Z face)
-			_add_box(head_socket, Vector3(0.38, 0.12, 0.10), Vector3(0.0, 0.16, 0.22), _shared_dark_mat)
-			_add_box(head_socket, Vector3(0.32, 0.05, 0.12), Vector3(0.0, 0.16, 0.23), _shared_cyan_mat)
+			if face_eyes_root != null:
+				face_eyes_root.visible = false
+			_add_box(head_socket, Vector3(0.22, 0.065, 0.04), Vector3(0.0, 0.016, 0.012), _shared_dark_mat)
+			_add_box(head_socket, Vector3(0.18, 0.030, 0.05), Vector3(0.0, 0.016, 0.020), _shared_cyan_mat)
 		&"spike_helm":
-			# Spiked red mohawk crest on top of head
+			# Spiked red mohawk crest on top of head (expressive eyes, eyebrows and mouth visible)
 			var crest_mat: ShaderMaterial = _make_toon_mat(Color(0.95, 0.16, 0.24), 0.12)
-			_add_box(head_socket, Vector3(0.16, 0.32, 0.46), Vector3(0.0, 0.44, 0.0), crest_mat)
+			_add_box(head_socket, Vector3(0.08, 0.16, 0.22), Vector3(0.0, 0.12, -0.06), crest_mat)
 		_:
-			# Default: show the natural expressive head of the 3D model!
+			# Default: show the natural expressive head with big eyes, eyebrows and mouth!
 			pass
+
+func _build_expressive_face() -> void:
+	if face_root == null:
+		return
+	_clear_socket(face_root)
+
+	# 1. Clean face plate mask covering old tiny dots & slit
+	var mask_mat := StandardMaterial3D.new()
+	mask_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mask_mat.albedo_color = Color(0.96, 0.88, 0.80) if fighter_id == 0 else Color(0.94, 0.86, 0.78)
+	_add_box(face_root, Vector3(0.24, 0.24, 0.008), Vector3(0.0, 0.005, 0.004), mask_mat)
+
+	# 2. Big Expressive Anime/Cartoon Eyes Root
+	face_eyes_root = Node3D.new()
+	face_eyes_root.name = "EyesRoot"
+	face_root.add_child(face_eyes_root)
+
+	var eye_y: float = 0.020
+	var eye_z: float = 0.010
+	var eye_xs: Array[float] = [-0.054, 0.054]
+
+	for ex: float in eye_xs:
+		# Outer dark eye contour / frame
+		_add_box(face_eyes_root, Vector3(0.054, 0.065, 0.008), Vector3(ex, eye_y, eye_z), _shared_dark_mat)
+		# Crisp white sclera
+		_add_box(face_eyes_root, Vector3(0.046, 0.056, 0.010), Vector3(ex, eye_y, eye_z + 0.002), _shared_white_mat)
+
+		# Iris & Pupil (Signature royal deep purple for player, dark contrasting for bots)
+		var iris_mat := StandardMaterial3D.new()
+		iris_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		iris_mat.albedo_color = Color(0.22, 0.12, 0.44) if fighter_id == 0 else Color(0.12, 0.08, 0.20)
+		_add_box(face_eyes_root, Vector3(0.032, 0.042, 0.012), Vector3(ex, eye_y - 0.002, eye_z + 0.004), iris_mat)
+
+		# Specular eye glints / highlights (Luce negli occhi)
+		_add_box(face_eyes_root, Vector3(0.015, 0.016, 0.014), Vector3(ex - 0.008, eye_y + 0.012, eye_z + 0.006), _shared_white_mat)
+		_add_box(face_eyes_root, Vector3(0.007, 0.008, 0.014), Vector3(ex + 0.008, eye_y - 0.008, eye_z + 0.006), _shared_white_mat)
+
+	# 3. Expressive Brawler Eyebrows (Dynamic inward-angled determination)
+	var eb_y: float = 0.066
+	_add_box(face_root, Vector3(0.055, 0.018, 0.010), Vector3(-0.054, eb_y, eye_z + 0.004), _shared_dark_mat, Vector3(0.0, 0.0, -14.0))
+	_add_box(face_root, Vector3(0.055, 0.018, 0.010), Vector3(0.054, eb_y, eye_z + 0.004), _shared_dark_mat, Vector3(0.0, 0.0, 14.0))
+
+	# 4. Expressive Brawler Smirk / Mouth
+	var mouth_y: float = -0.046
+	# Outer dark smirk cavity
+	_add_box(face_root, Vector3(0.090, 0.026, 0.008), Vector3(0.004, mouth_y, eye_z), _shared_dark_mat)
+	# White teeth flash
+	_add_box(face_root, Vector3(0.072, 0.011, 0.010), Vector3(0.004, mouth_y + 0.005, eye_z + 0.002), _shared_white_mat)
+	# Lower lip / red tongue accent
+	var tongue_mat := StandardMaterial3D.new()
+	tongue_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	tongue_mat.albedo_color = Color(0.92, 0.24, 0.36)
+	_add_box(face_root, Vector3(0.048, 0.007, 0.010), Vector3(0.004, mouth_y - 0.005, eye_z + 0.002), tongue_mat)
 
 func _populate_arm_sockets(part_id: StringName) -> void:
 	_clear_socket(left_arm_socket)

@@ -24,6 +24,7 @@ func _initialize() -> void:
 		"test_multiple_map_themes",
 		"test_combat_juice_and_stolen_flying_part",
 		"test_customization_hangar_stage_and_cards",
+		"test_expressive_face_and_toon_materials",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -694,4 +695,75 @@ func test_customization_hangar_stage_and_cards() -> bool:
 	assert_eq(controller.fighter_nodes[0]._transform_flash_timer > 0.0, true, "hero_transform_pop_triggered_on_equip")
 
 	controller.free()
+	return true
+
+func test_expressive_face_and_toon_materials() -> bool:
+	# Test Point 9: Big eyes, eyebrows, expressive mouth, toon shader, rim light, warmth boost and dark outline
+	var root: Node = (self as SceneTree).root
+
+	# 1. Test Player Fighter 0 (Hero)
+	var hero := BlockyFighter3D.new()
+	root.add_child(hero)
+	hero.setup_fighter(0, false, Color.WHITE, 0)
+
+	# Verify face root and alignment
+	assert_true(hero.face_root != null, "hero_face_root_exists")
+	assert_eq(hero.face_root.position, Vector3(0.0, 1.625, 0.118), "hero_face_root_position_aligned")
+	assert_true(is_equal_approx(hero.face_root.rotation_degrees.x, -17.5), "hero_face_root_tilt_aligned")
+
+	# Verify face elements
+	assert_true(hero.face_eyes_root != null, "hero_face_eyes_root_exists")
+	assert_true(hero.face_eyes_root.get_child_count() >= 8, "hero_big_eyes_with_sclera_iris_glints")
+	assert_true(hero.face_root.get_child_count() >= 6, "hero_face_features_mask_eyebrows_mouth")
+
+	# Verify toon shader on char_mesh
+	assert_true(hero.char_mesh != null, "hero_char_mesh_exists")
+	var mat: Material = hero.char_mesh.get_surface_override_material(0)
+	assert_true(mat is ShaderMaterial, "hero_char_mesh_uses_shader_material")
+	var smat := mat as ShaderMaterial
+	assert_eq(smat.shader, BlockyFighter3D.TOON_SHADER, "hero_uses_toon_shader")
+	assert_eq(smat.get_shader_parameter("use_texture"), true, "hero_toon_uses_albedo_texture")
+	assert_eq(smat.get_shader_parameter("skin_warmth_boost"), 0.55, "hero_toon_has_skin_warmth_boost")
+	assert_eq(smat.get_shader_parameter("rim_strength"), 0.48, "hero_toon_has_rim_light_strength")
+
+	# Verify dark inverted-hull outline
+	assert_true(smat.next_pass is ShaderMaterial, "hero_toon_has_outline_next_pass")
+	var out_mat := smat.next_pass as ShaderMaterial
+	assert_eq(out_mat.shader, BlockyFighter3D.OUTLINE_SHADER, "hero_outline_shader_assigned")
+	assert_eq(out_mat.get_shader_parameter("outline_width"), 0.024, "hero_subtle_dark_outline_width")
+
+	# 2. Test Head Slot Equipment Toggles
+	# Default base_head -> eyes visible
+	hero.apply_slots({PartData.Slot.HEAD: &"base_head"}, false, false)
+	assert_eq(hero.face_eyes_root.visible, true, "eyes_visible_with_base_head")
+
+	# laser_eye -> eyes hidden by visor, laser mesh in head socket
+	hero.apply_slots({PartData.Slot.HEAD: &"laser_eye"}, false, false)
+	assert_eq(hero.face_eyes_root.visible, false, "eyes_hidden_with_laser_eye")
+	assert_true(hero.head_socket.get_child_count() >= 2, "laser_eye_visor_and_lens_present")
+
+	# visor_head -> eyes hidden by cyber shades, shades mesh in head socket
+	hero.apply_slots({PartData.Slot.HEAD: &"visor_head"}, false, false)
+	assert_eq(hero.face_eyes_root.visible, false, "eyes_hidden_with_visor_head")
+	assert_true(hero.head_socket.get_child_count() >= 2, "visor_head_sunglasses_present")
+
+	# spike_helm -> eyes visible, crest on top of head
+	hero.apply_slots({PartData.Slot.HEAD: &"spike_helm"}, false, false)
+	assert_eq(hero.face_eyes_root.visible, true, "eyes_visible_with_spike_helm")
+	assert_true(hero.head_socket.get_child_count() >= 1, "spike_helm_crest_present")
+
+	# 3. Test Bot Fighter 1
+	var bot := BlockyFighter3D.new()
+	var bot_color := Color(0.95, 0.28, 0.28)
+	root.add_child(bot)
+	bot.setup_fighter(1, true, bot_color, 1)
+
+	assert_eq(bot.is_bot, true, "bot_fighter_flag_set")
+	assert_true(bot.face_root != null, "bot_has_face_root")
+	var bot_mat := bot.char_mesh.get_surface_override_material(0) as ShaderMaterial
+	assert_true(bot_mat != null, "bot_char_mesh_uses_toon_shader")
+	assert_eq(bot_mat.get_shader_parameter("base_color"), bot_color, "bot_inherits_palette_base_color")
+
+	hero.free()
+	bot.free()
 	return true

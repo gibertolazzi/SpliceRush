@@ -763,7 +763,9 @@ func _on_custom_color_selected(col: Color) -> void:
 	var fn: BlockyFighter3D = fighter_nodes[0]
 	if fn.char_mesh != null:
 		var mat: Material = fn.char_mesh.get_surface_override_material(0)
-		if mat is StandardMaterial3D:
+		if mat is ShaderMaterial:
+			mat.set_shader_parameter("base_color", col)
+		elif mat is StandardMaterial3D:
 			mat.albedo_color = col
 	fn.trigger_transform_pop()
 	if sound_controller != null:
@@ -801,7 +803,9 @@ func _on_custom_play_pressed(slots: Dictionary, col: Color) -> void:
 		fighter_nodes[0].apply_slots(slots, false, true)
 		if fighter_nodes[0].char_mesh != null:
 			var mat: Material = fighter_nodes[0].char_mesh.get_surface_override_material(0)
-			if mat is StandardMaterial3D:
+			if mat is ShaderMaterial:
+				mat.set_shader_parameter("base_color", col)
+			elif mat is StandardMaterial3D:
 				mat.albedo_color = col
 
 	# Smooth camera sweep to arena battle view
