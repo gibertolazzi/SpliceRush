@@ -282,6 +282,9 @@ static func compute_slots_mass(slots: Dictionary) -> int:
 		total += p.mass_value
 	return total
 
+static func is_abomination_counts(arms_cnt: int, legs_cnt: int, core_cnt: int) -> bool:
+	return arms_cnt >= 3 and legs_cnt >= 3 and core_cnt >= 3
+
 static func is_abomination_slots(slots: Dictionary) -> bool:
 	_ensure_initialized()
 	var required_slots: Array[PartData.Slot] = [

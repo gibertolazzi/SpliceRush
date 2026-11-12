@@ -39,6 +39,36 @@ func _setup_audio_buses() -> void:
 		AudioServer.set_bus_send(idx, &"Master")
 		AudioServer.set_bus_volume_db(idx, linear_to_db(0.85))
 
+func set_music_volume_linear(val: float) -> void:
+	var idx: int = AudioServer.get_bus_index(&"Music")
+	if idx != -1:
+		var clamped: float = clampf(val, 0.0, 1.0)
+		AudioServer.set_bus_mute(idx, clamped <= 0.01)
+		AudioServer.set_bus_volume_db(idx, linear_to_db(maxf(0.001, clamped)))
+
+func get_music_volume_linear() -> float:
+	var idx: int = AudioServer.get_bus_index(&"Music")
+	if idx != -1:
+		if AudioServer.is_bus_mute(idx):
+			return 0.0
+		return clampf(db_to_linear(AudioServer.get_bus_volume_db(idx)), 0.0, 1.0)
+	return 0.45
+
+func set_sfx_volume_linear(val: float) -> void:
+	var idx: int = AudioServer.get_bus_index(&"SFX")
+	if idx != -1:
+		var clamped: float = clampf(val, 0.0, 1.0)
+		AudioServer.set_bus_mute(idx, clamped <= 0.01)
+		AudioServer.set_bus_volume_db(idx, linear_to_db(maxf(0.001, clamped)))
+
+func get_sfx_volume_linear() -> float:
+	var idx: int = AudioServer.get_bus_index(&"SFX")
+	if idx != -1:
+		if AudioServer.is_bus_mute(idx):
+			return 0.0
+		return clampf(db_to_linear(AudioServer.get_bus_volume_db(idx)), 0.0, 1.0)
+	return 0.85
+
 func _synthesize_all_streams() -> void:
 	stream_hit = _make_synth_wav(0.09, [260.0, 110.0], true, false)
 	stream_kill = _make_synth_wav(0.24, [420.0, 280.0, 140.0], true, false)

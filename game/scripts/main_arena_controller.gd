@@ -62,13 +62,15 @@ var _web_first_input_reported: bool = false
 var _preview_attack_vfx: bool = false
 var _preview_face_east: bool = false
 var _preview_face_south: bool = false
+var _preview_settings: bool = false
+var _preview_9parts: bool = false
 var _camera_transitioning: bool = false
 
 func _ready() -> void:
 	_parse_cmdline_args()
 	if _preview_customize:
 		is_customizing = true
-	elif _simulate_input_preview or _preview_frenzy or _preview_last10s or _preview_result or _preview_clip or _preview_steal_juice or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1 or _preview_face_east or _preview_face_south:
+	elif _simulate_input_preview or _preview_frenzy or _preview_last10s or _preview_result or _preview_clip or _preview_steal_juice or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1 or _preview_face_east or _preview_face_south or _preview_settings or _preview_9parts:
 		is_customizing = false
 	else:
 		is_customizing = true
@@ -136,6 +138,20 @@ func _ready() -> void:
 	elif _preview_tutorial_dismissed and hud != null:
 		hud.intro_tutorial_timer = 0.0
 		hud._intro_elapsed = 6.0
+	if _preview_settings and hud != null:
+		hud.toggle_settings()
+	if _preview_9parts and not server.combatants.is_empty():
+		var p0: MatchServer.CombatantState = server.combatants[0]
+		p0.collected_parts[PartData.Slot.ARMS] = 3
+		p0.collected_parts[PartData.Slot.LEGS] = 3
+		p0.collected_parts[PartData.Slot.CORE] = 3
+		p0.slots[PartData.Slot.ARMS] = &"chainsaw_arm"
+		p0.slots[PartData.Slot.LEGS] = &"rocket_legs"
+		p0.slots[PartData.Slot.CORE] = &"shield_core"
+		server._recalc_combatant_stats(p0, true)
+		if hud != null:
+			hud.on_collected_parts_updated(p0.collected_parts, p0.stolen_parts_count)
+			hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)
 	if _preview_face_east and not server.combatants.is_empty():
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		p0.pos = Vector2(-1.5, 2.0)
@@ -213,6 +229,12 @@ func _parse_cmdline_args() -> void:
 			_requested_map_theme = MatchServer.MapTheme.FLOATING_HEX
 		elif arg == "--preview-customize":
 			_preview_customize = true
+		elif arg == "--preview-settings":
+			_preview_settings = true
+			_skip_customize = true
+		elif arg == "--preview-9parts":
+			_preview_9parts = true
+			_skip_customize = true
 		elif arg == "--preview-loading":
 			_preview_loading = true
 		elif arg == "--preview-one-leg":
@@ -468,14 +490,16 @@ func _setup_ui() -> void:
 
 	hud = VerticalHUD.new()
 	hud.name = "VerticalHUD"
+	hud.sound_controller = sound_controller
 	hud.visible = not is_customizing
 	layer.add_child(hud)
 	hud.rematch_requested.connect(_on_hud_rematch_requested)
 	hud.customize_requested.connect(_on_hud_customize_requested)
+	hud.leave_match_requested.connect(_on_hud_leave_match_requested)
 	if not server.combatants.is_empty():
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)
-		hud.on_stolen_parts_updated(p0.stolen_parts_count)
+		hud.on_collected_parts_updated(p0.collected_parts, p0.stolen_parts_count)
 
 func trigger_hit_stop(duration_sec: float, time_scale_val: float = 0.12) -> void:
 	if _screenshot_path != "":
@@ -678,7 +702,8 @@ func _on_server_state_ticked(time_left: float) -> void:
 	if hud != null:
 		hud.on_match_time_updated(time_left)
 		if not server.combatants.is_empty():
-			hud.on_stolen_parts_updated(server.combatants[0].stolen_parts_count)
+			var p0: MatchServer.CombatantState = server.combatants[0]
+			hud.on_collected_parts_updated(p0.collected_parts, p0.stolen_parts_count)
 	if virtual_joystick != null and not server.combatants.is_empty():
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		virtual_joystick.attack_cooldown_timer = p0.attack_cooldown
@@ -789,6 +814,9 @@ func _on_server_part_picked_up(drop_id: int, collector_id: int, part_id: StringN
 func _on_server_combatant_slots_changed(combatant_id: int, slots: Dictionary, is_abomination: bool, total_mass: int) -> void:
 	if combatant_id == 0 and hud != null:
 		hud.on_player_slots_updated(slots, is_abomination, total_mass)
+		if not server.combatants.is_empty():
+			var p0: MatchServer.CombatantState = server.combatants[0]
+			hud.on_collected_parts_updated(p0.collected_parts, p0.stolen_parts_count)
 
 	if _flying_parts_in_flight.has(combatant_id):
 		# Stash pending slots until flying projectile impacts body
@@ -999,6 +1027,9 @@ func _on_hud_customize_requested() -> void:
 		fighter_nodes[0].rotation = Vector3.ZERO
 	for i: int in range(1, fighter_nodes.size()):
 		fighter_nodes[i].visible = false
+
+func _on_hud_leave_match_requested() -> void:
+	_on_hud_customize_requested()
 
 func _setup_customization_stage() -> void:
 	customize_stage_root = Node3D.new()

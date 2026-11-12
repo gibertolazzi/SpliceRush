@@ -88,6 +88,11 @@ class CombatantState extends RefCounted:
 		PartData.Slot.LEGS: &"base_boots",
 		PartData.Slot.CORE: &"base_core",
 	}
+	var collected_parts: Dictionary = {
+		PartData.Slot.ARMS: 0,
+		PartData.Slot.LEGS: 0,
+		PartData.Slot.CORE: 0,
+	}
 
 const FIGHTER_PALETTE: Array[Color] = [
 	Color(0.50, 0.12, 0.88), # 0: Player Purple (Crown shirt)
@@ -426,7 +431,13 @@ func _recalc_combatant_stats(c: CombatantState, emit_signals: bool = true) -> vo
 	c.pickup_mult = pick
 
 	var prev_abom: bool = c.is_abomination
-	c.is_abomination = PartCatalog.is_abomination_slots(c.slots)
+	c.stolen_parts_count = int(c.collected_parts.get(PartData.Slot.ARMS, 0)) + int(c.collected_parts.get(PartData.Slot.LEGS, 0)) + int(c.collected_parts.get(PartData.Slot.CORE, 0))
+	var has_9_parts: bool = (
+		int(c.collected_parts.get(PartData.Slot.ARMS, 0)) >= 3 and
+		int(c.collected_parts.get(PartData.Slot.LEGS, 0)) >= 3 and
+		int(c.collected_parts.get(PartData.Slot.CORE, 0)) >= 3
+	)
+	c.is_abomination = has_9_parts or PartCatalog.is_abomination_slots(c.slots)
 	c.total_mass = PartCatalog.compute_slots_mass(c.slots) + c.kills * balance.kill_mass_bonus
 
 	if emit_signals:
@@ -442,7 +453,9 @@ func equip_part_on_combatant(combatant_id: int, part_id: StringName) -> bool:
 	var c: CombatantState = combatants[combatant_id]
 	var pdata: PartData = PartCatalog.get_part(part_id)
 	c.slots[pdata.slot] = pdata.part_id
-	c.stolen_parts_count += 1
+	if c.collected_parts.has(pdata.slot):
+		c.collected_parts[pdata.slot] = mini(3, int(c.collected_parts.get(pdata.slot, 0)) + 1)
+	c.stolen_parts_count = int(c.collected_parts.get(PartData.Slot.ARMS, 0)) + int(c.collected_parts.get(PartData.Slot.LEGS, 0)) + int(c.collected_parts.get(PartData.Slot.CORE, 0))
 	c.transform_anim_timer = 0.48
 	c.hp = mini(c.max_hp, c.hp + balance.part_pickup_heal)
 	_recalc_combatant_stats(c, true)
@@ -742,11 +755,15 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 		var cur_pid: StringName = victim.slots[slot_to_drop] as StringName
 		var severed_pid: StringName = PartCatalog.get_severed_step(cur_pid, slot_to_drop)
 		victim.slots[slot_to_drop] = severed_pid
+		if victim.collected_parts.has(slot_to_drop):
+			victim.collected_parts[slot_to_drop] = maxi(0, int(victim.collected_parts.get(slot_to_drop, 0)) - 1)
 
 		var angle: float = _rng.randf_range(0.0, TAU) + float(dropped_count) * 2.1
 		var pop_vel := Vector2(cos(angle), sin(angle)) * balance.part_drop_pop_speed
 		spawn_dropped_part(drop_pid, victim.pos + Vector2(cos(angle), sin(angle)) * 0.45, pop_vel, false)
 		dropped_count += 1
+
+	victim.stolen_parts_count = int(victim.collected_parts.get(PartData.Slot.ARMS, 0)) + int(victim.collected_parts.get(PartData.Slot.LEGS, 0)) + int(victim.collected_parts.get(PartData.Slot.CORE, 0))
 
 	if dropped_count == 0:
 		# If victim only had base parts, progressively sever one limb and drop a bonus part
@@ -781,6 +798,9 @@ func _strip_single_part_from_combatant(victim: CombatantState, attacker: Combata
 	var chosen_slot: PartData.Slot = eligible[_rng.randi_range(0, eligible.size() - 1)]
 	var drop_pid: StringName = victim.slots[chosen_slot] as StringName
 	victim.slots[chosen_slot] = PartCatalog.get_severed_step(drop_pid, chosen_slot)
+	if victim.collected_parts.has(chosen_slot):
+		victim.collected_parts[chosen_slot] = maxi(0, int(victim.collected_parts.get(chosen_slot, 0)) - 1)
+	victim.stolen_parts_count = int(victim.collected_parts.get(PartData.Slot.ARMS, 0)) + int(victim.collected_parts.get(PartData.Slot.LEGS, 0)) + int(victim.collected_parts.get(PartData.Slot.CORE, 0))
 	_recalc_combatant_stats(victim, true)
 
 	var dir: Vector2 = (victim.pos - attacker.pos).normalized()

@@ -3,9 +3,25 @@ extends Control
 
 signal rematch_requested
 signal customize_requested()
+signal leave_match_requested()
+signal settings_toggled(is_open: bool)
 
 var time_remaining_sec: float = 90.0
 var stolen_parts_count: int = 0
+var collected_slot_counts: Dictionary = {
+	PartData.Slot.ARMS: 0,
+	PartData.Slot.LEGS: 0,
+	PartData.Slot.CORE: 0,
+}
+const InGameSettingsModalScript := preload("res://game/ui/in_game_settings_modal.gd")
+
+var sound_controller: SoundController = null:
+	set(val):
+		sound_controller = val
+		if settings_modal != null:
+			settings_modal.sound_controller = val
+
+var settings_modal: Control = null
 var is_abomination: bool = false
 var is_frenzy: bool = false
 var show_result_overlay: bool = false
@@ -58,7 +74,34 @@ var _hamburger_btn_rect := Rect2(Vector2(540.0 - 24.0 - 54.0, 18.0), Vector2(54.
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_PASS
+	_setup_settings_modal()
 	_apply_safe_area()
+
+func _setup_settings_modal() -> void:
+	if settings_modal == null:
+		settings_modal = InGameSettingsModalScript.new()
+		settings_modal.name = "InGameSettingsModal"
+		settings_modal.sound_controller = sound_controller
+		add_child(settings_modal)
+		settings_modal.leave_match_requested.connect(func() -> void:
+			leave_match_requested.emit()
+		)
+		settings_modal.closed.connect(func() -> void:
+			settings_toggled.emit(false)
+			queue_redraw()
+		)
+		settings_modal.language_changed.connect(func(_loc: String) -> void:
+			queue_redraw()
+		)
+
+func toggle_settings() -> void:
+	_setup_settings_modal()
+	settings_modal.toggle()
+	settings_toggled.emit(settings_modal.is_open)
+	queue_redraw()
+
+func is_settings_open() -> bool:
+	return settings_modal != null and settings_modal.is_open
 
 func _process(delta: float) -> void:
 	var needs_redraw: bool = false
@@ -97,12 +140,12 @@ func _input(event: InputEvent) -> void:
 		if event is InputEventScreenTouch:
 			var st := event as InputEventScreenTouch
 			if st.pressed and _hamburger_btn_rect.has_point(st.position):
-				customize_requested.emit()
+				toggle_settings()
 				get_viewport().set_input_as_handled()
 		elif event is InputEventMouseButton:
 			var mb := event as InputEventMouseButton
 			if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and _hamburger_btn_rect.has_point(mb.position):
-				customize_requested.emit()
+				toggle_settings()
 				get_viewport().set_input_as_handled()
 		return
 	if event is InputEventScreenTouch:
@@ -179,6 +222,11 @@ func on_stolen_parts_updated(new_count: int) -> void:
 	if stolen_parts_count != new_count:
 		stolen_parts_count = new_count
 		queue_redraw()
+
+func on_collected_parts_updated(parts: Dictionary, total_count: int) -> void:
+	collected_slot_counts = parts.duplicate()
+	stolen_parts_count = total_count
+	queue_redraw()
 
 func on_player_slots_updated(slots: Dictionary, abom: bool, mass: int) -> void:
 	if abom and not is_abomination:
@@ -655,10 +703,14 @@ func _draw_mockup_top_bar(rect_size: Vector2) -> void:
 	# ----------------- ROW 2: PARTS & SLOTS (Y = 74.0, H = 48.0) -----------------
 	# 1. Stolen Parts Progress Pill: [ 2/9 ]
 	var prog_rect := Rect2(Vector2(24.0, 74.0), Vector2(78.0, 48.0))
+	var is_abom_ready: bool = (stolen_parts_count >= 9 or is_abomination)
+	var prog_border: Color = Color(1.0, 0.85, 0.20) if is_abom_ready else pill_border
+	var prog_border_w: float = 2.4 if is_abom_ready else 1.4
 	_draw_rounded_rect(prog_rect, navy_bg, radius, true)
-	_draw_rounded_rect(prog_rect, pill_border, radius, false, 1.4)
-	var prog_str: String = "%d/9" % [stolen_parts_count]
-	draw_string(font_bold, prog_rect.position + Vector2(0.0, 33.0), prog_str, HORIZONTAL_ALIGNMENT_CENTER, 78.0, 24, white)
+	_draw_rounded_rect(prog_rect, prog_border, radius, false, prog_border_w)
+	var prog_str: String = "%d/9" % [mini(9, stolen_parts_count)]
+	var prog_text_col: Color = Color(1.0, 0.88, 0.25) if is_abom_ready else white
+	draw_string(font_bold, prog_rect.position + Vector2(0.0, 33.0), prog_str, HORIZONTAL_ALIGNMENT_CENTER, 78.0, 24, prog_text_col)
 
 	# 2. Slot Boxes: Arm (Fist), Leg (Boot), Components (Wrench)
 	var slot_defs: Array[Dictionary] = [
@@ -696,11 +748,13 @@ func _draw_mockup_top_bar(rect_size: Vector2) -> void:
 		var is_upgraded: bool = (pid != PartCatalog.get_base_part_for_slot(s_enum))
 		var pdata: PartData = PartCatalog.get_part(pid)
 		var r_col: Color = PartCatalog.get_rarity_color(pdata.rarity)
+		var slot_cnt: int = int(collected_slot_counts.get(s_enum, 0))
+		var is_slot_full: bool = (slot_cnt >= 3)
 
 		_draw_rounded_rect(b_rect, navy_bg, radius, true)
 
-		var b_border: Color = r_col if is_upgraded else pill_border
-		var b_w: float = 2.0 if is_upgraded else 1.4
+		var b_border: Color = Color(1.0, 0.85, 0.20) if is_slot_full else (r_col if is_upgraded else pill_border)
+		var b_w: float = 2.4 if is_slot_full else (2.0 if is_upgraded else 1.4)
 		_draw_rounded_rect(b_rect, b_border, radius, false, b_w)
 
 		# Slot flash pulse when part stolen
@@ -716,6 +770,15 @@ func _draw_mockup_top_bar(rect_size: Vector2) -> void:
 			draw_texture_rect(tex, Rect2(tex_pos, tex_sz), false, white)
 		else:
 			_draw_slot_mini_icon(s_idx, b_rect.get_center(), r_col)
+
+		# 3-dot pip indicator at bottom of slot box (0/3 to 3/3 collected)
+		var pip_y: float = b_rect.position.y + 41.5
+		var pip_cx: float = b_rect.get_center().x
+		for pip_i in range(3):
+			var pip_x: float = pip_cx - 10.0 + float(pip_i) * 10.0
+			var is_pip_filled: bool = (pip_i < slot_cnt)
+			var dot_col: Color = (Color(1.0, 0.85, 0.20) if is_pip_filled else Color(0.35, 0.35, 0.55, 0.55))
+			draw_circle(Vector2(pip_x, pip_y), 2.2, dot_col)
 
 func _draw_top_bar_capsules(rect_size: Vector2) -> void:
 	var total_sec: int = maxi(0, int(ceil(time_remaining_sec)))

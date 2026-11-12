@@ -33,6 +33,8 @@ func _initialize() -> void:
 		"test_reference_mockup_vertical_hud",
 		"test_ingame_character_visibility_and_walk_retargeting",
 		"test_camera_follow_rotation_and_enemy_visibility",
+		"test_abomination_transformation_at_9_parts",
+		"test_in_game_settings_modal_non_pausing_and_realtime_combat",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -1049,17 +1051,18 @@ func test_reference_mockup_vertical_hud() -> bool:
 	assert_true(hud.LEG_SVG != null, "hud_leg_svg_loaded")
 	assert_true(hud.CORE_SVG != null, "hud_core_svg_loaded")
 
-	# Verify Hamburger button interaction emits customize_requested
-	var customize_emitted := [false]
-	var on_cust := func() -> void:
-		customize_emitted[0] = true
-	hud.customize_requested.connect(on_cust)
+	# Verify Hamburger button interaction opens In-Game Settings Modal
+	var toggled_emitted := [false]
+	var on_toggled := func(open_state: bool) -> void:
+		toggled_emitted[0] = open_state
+	hud.settings_toggled.connect(on_toggled)
 	var ham_event := InputEventMouseButton.new()
 	ham_event.pressed = true
 	ham_event.button_index = MOUSE_BUTTON_LEFT
 	ham_event.position = hud._hamburger_btn_rect.get_center()
 	hud._input(ham_event)
-	assert_true(customize_emitted[0], "hud_hamburger_button_emits_customize_requested")
+	assert_true(toggled_emitted[0], "hud_hamburger_button_toggles_settings_modal")
+	assert_true(hud.is_settings_open(), "hud_settings_modal_is_open")
 
 	# Verify TouchJoystick button layout matches reference mockup
 	var joy := TouchJoystick.new()
@@ -1191,6 +1194,158 @@ func test_camera_follow_rotation_and_enemy_visibility() -> bool:
 	# Enemy placed 3 units East of player (0.0 + 3.0, 0.0)
 	var enemy_pos_3d := Vector3(3.0, 1.0, 0.0)
 	assert_true(not arena_ctrl.camera.is_position_behind(enemy_pos_3d), "enemy_in_front_is_not_behind_camera")
+
+	arena_ctrl.free()
+	return true
+
+func test_abomination_transformation_at_9_parts() -> bool:
+	var srv := MatchServer.new()
+	srv.bots_enabled = false
+	root.add_child(srv)
+	srv.dropped_parts.clear()
+
+	var bot: MatchServer.CombatantState = srv.combatants[1]
+	bot.slots = {
+		PartData.Slot.HEAD: &"base_head",
+		PartData.Slot.ARMS: &"base_fist",
+		PartData.Slot.LEGS: &"base_boots",
+		PartData.Slot.CORE: &"base_core",
+	}
+	bot.collected_parts = {
+		PartData.Slot.ARMS: 0,
+		PartData.Slot.LEGS: 0,
+		PartData.Slot.CORE: 0,
+	}
+	bot.stolen_parts_count = 0
+	srv._recalc_combatant_stats(bot, false)
+	assert_eq(bot.is_abomination, false, "initial_bot_is_not_abomination")
+	assert_eq(bot.stolen_parts_count, 0, "initial_stolen_parts_0")
+
+	# Equip 3 arms, 2 legs, 3 core (total 8 parts, missing 1 leg)
+	srv.equip_part_on_combatant(bot.id, &"chainsaw_arm")
+	srv.equip_part_on_combatant(bot.id, &"chainsaw_arm")
+	srv.equip_part_on_combatant(bot.id, &"chainsaw_arm")
+	assert_eq(bot.collected_parts[PartData.Slot.ARMS], 3, "arms_count_3")
+
+	srv.equip_part_on_combatant(bot.id, &"rocket_legs")
+	srv.equip_part_on_combatant(bot.id, &"rocket_legs")
+	assert_eq(bot.collected_parts[PartData.Slot.LEGS], 2, "legs_count_2")
+
+	srv.equip_part_on_combatant(bot.id, &"shield_core")
+	srv.equip_part_on_combatant(bot.id, &"shield_core")
+	srv.equip_part_on_combatant(bot.id, &"shield_core")
+	assert_eq(bot.collected_parts[PartData.Slot.CORE], 3, "core_count_3")
+	assert_eq(bot.stolen_parts_count, 8, "total_stolen_parts_8")
+	assert_eq(bot.is_abomination, false, "not_abomination_at_8_parts")
+
+	# Equip the 3rd leg -> 3 arms, 3 legs, 3 core = 9 parts total
+	srv.equip_part_on_combatant(bot.id, &"rocket_legs")
+	assert_eq(bot.collected_parts[PartData.Slot.LEGS], 3, "legs_count_3")
+	assert_eq(bot.stolen_parts_count, 9, "total_stolen_parts_9")
+	assert_eq(bot.is_abomination, true, "becomes_abomination_at_9_parts_collected")
+
+	# When killed, victim drops parts and collected_parts decrements below 9 -> Abomination is lost
+	srv._handle_combatant_death(bot, srv.combatants[0])
+	assert_true(bot.stolen_parts_count < 9, "stolen_parts_count_decreased_on_death")
+	assert_eq(bot.is_abomination, false, "abomination_lost_status_after_dropping_parts")
+
+	srv.free()
+	return true
+
+func test_in_game_settings_modal_non_pausing_and_realtime_combat() -> bool:
+	# 1. Test InGameSettingsModal in isolation
+	var modal: Control = VerticalHUD.InGameSettingsModalScript.new()
+	var snd := SoundController.new()
+	root.add_child(snd)
+	root.add_child(modal)
+	modal.sound_controller = snd
+	modal.custom_minimum_size = Vector2(540.0, 960.0)
+	modal.size = Vector2(540.0, 960.0)
+
+	# Open modal
+	assert_eq(modal.is_open, false, "modal_initially_closed")
+	modal.open()
+	assert_eq(modal.is_open, true, "modal_is_open_after_open_call")
+	assert_eq(modal.visible, true, "modal_visible_after_open_call")
+
+	# CRUCIAL CONSTRAINT: The game must NOT pause!
+	assert_eq(self.paused, false, "game_tree_is_NOT_paused_while_settings_modal_is_open")
+
+	# Test Audio volume adjustments
+	snd.set_music_volume_linear(0.5)
+	assert_true(is_equal_approx(snd.get_music_volume_linear(), 0.5), "music_volume_linear_set_to_0_5")
+	modal.music_volume = 0.2
+	modal._apply_music()
+	assert_true(is_equal_approx(snd.get_music_volume_linear(), 0.2), "music_volume_reflected_in_sound_controller")
+
+	snd.set_sfx_volume_linear(0.8)
+	assert_true(is_equal_approx(snd.get_sfx_volume_linear(), 0.8), "sfx_volume_linear_set_to_0_8")
+	modal.sfx_volume = 0.4
+	modal._apply_sfx()
+	assert_true(is_equal_approx(snd.get_sfx_volume_linear(), 0.4), "sfx_volume_reflected_in_sound_controller")
+
+	# Test Language Switcher
+	modal.set_language("en")
+	assert_eq(modal.current_locale, "en", "locale_switched_to_en")
+	assert_eq(I18nService.get_current_locale(), "en", "i18n_service_locale_en")
+	assert_true(tr(&"SETTINGS_TITLE").to_upper().find("SETTINGS") != -1, "i18n_en_settings_title")
+
+	modal.set_language("it")
+	assert_eq(modal.current_locale, "it", "locale_switched_back_to_it")
+	assert_eq(I18nService.get_current_locale(), "it", "i18n_service_locale_it")
+	assert_true(tr(&"SETTINGS_TITLE").to_upper().find("IMPOSTAZIONI") != -1, "i18n_it_settings_title")
+
+	# Test Privacy Policy & Terms of Service Subdialogs
+	assert_eq(modal.sub_dialog, 0, "initial_subdialog_none")
+	modal.sub_dialog = 1
+	assert_eq(modal.sub_dialog, 1, "subdialog_privacy_policy_active")
+	modal.sub_dialog = 2
+	assert_eq(modal.sub_dialog, 2, "subdialog_tos_active")
+	modal.sub_dialog = 0
+	assert_eq(modal.sub_dialog, 0, "subdialog_closed")
+
+	# Test Leave Match signal
+	var leave_emitted := [false]
+	modal.leave_match_requested.connect(func() -> void:
+		leave_emitted[0] = true
+	)
+	modal.leave_match_requested.emit()
+	assert_true(leave_emitted[0], "leave_match_signal_emits_cleanly")
+
+	# Close modal
+	modal.close()
+	assert_eq(modal.is_open, false, "modal_closed")
+	assert_eq(modal.visible, false, "modal_hidden_when_closed")
+	assert_eq(self.paused, false, "game_remains_unpaused_after_close")
+
+	modal.free()
+	snd.free()
+
+	# 2. Test Live Arena Simulation with Settings Open (Real-time combat constraint)
+	var arena_ctrl := MainArenaController.new()
+	arena_ctrl._skip_customize = true
+	root.add_child(arena_ctrl)
+
+	# Open settings via HUD
+	arena_ctrl.hud.toggle_settings()
+	assert_true(arena_ctrl.hud.is_settings_open(), "hud_settings_opened_during_match")
+	assert_eq(self.paused, false, "tree_not_paused_in_full_arena")
+
+	# Step server simulation and verify combat continues
+	var p0: MatchServer.CombatantState = arena_ctrl.server.combatants[0]
+	var initial_hp: int = p0.hp
+	var bot1: MatchServer.CombatantState = arena_ctrl.server.combatants[1]
+	bot1.pos = p0.pos + Vector2(0.5, 0.0) # Bot right next to player
+
+	# Step simulation for 60 ticks (2 seconds)
+	for _i: int in range(60):
+		arena_ctrl.server.step_simulation(1.0 / 30.0)
+
+	# Match time should have elapsed while in settings
+	assert_true(arena_ctrl.server.match_elapsed_sec > 1.8, "match_timer_continues_running_in_settings")
+
+	# Bot auto-attacks player while player is in settings, proving player can take damage / be killed
+	assert_true(p0.hp < initial_hp, "player_takes_damage_from_enemies_while_settings_modal_is_open")
 
 	arena_ctrl.free()
 	return true

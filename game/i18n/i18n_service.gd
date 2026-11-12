@@ -83,6 +83,21 @@ const TRANSLATIONS: Dictionary = {
 		"A11Y_SHAKE_OFF": "Shake: OFF",
 		"A11Y_COLORBLIND_ON": "Daltonismo: ON",
 		"A11Y_COLORBLIND_OFF": "Daltonismo: OFF",
+		"SETTINGS_TITLE": "IMPOSTAZIONI",
+		"SETTINGS_MUSIC": "MUSICA",
+		"SETTINGS_SFX": "EFFETTI SFX",
+		"SETTINGS_LANGUAGE": "LINGUA",
+		"SETTINGS_LANG_IT": "ITALIANO",
+		"SETTINGS_LANG_EN": "ENGLISH",
+		"SETTINGS_LEAVE_MATCH": "ABBANDONA PARTITA",
+		"SETTINGS_PRIVACY_POLICY": "PRIVACY POLICY",
+		"SETTINGS_TERMS_OF_SERVICE": "TERMINI DI SERVIZIO",
+		"SETTINGS_RESUME": "RIPRENDI MATCH",
+		"SETTINGS_CLOSE": "CHIUDI",
+		"SETTINGS_MATCH_CONTINUES_HINT": "PARTITA IN CORSO! Puoi essere attaccato!",
+		"SETTINGS_OPEN_WEB": "APRI SUL WEB",
+		"PRIVACY_TEXT": "SPLICE RUSH non raccoglie dati personali identificabili. Si gioca da ospite senza registrazione obbligatoria. I salvataggi e le preferenze sono memorizzati localmente sul dispositivo in conformità a GDPR e COPPA. Nessun dato viene ceduto a terzi per scopi pubblicitari o tracciamento.",
+		"TOS_TEXT": "SPLICE RUSH è un arena brawler verticale free-to-play. Monetizzazione basata esclusivamente su elementi cosmetici (nessun pay-to-win né loot box con vantaggi di gioco). Comportamento corretto: vietati exploit o cheat. Il gioco è destinato a un pubblico 12+.",
 	},
 	"en": {
 		"GAME_TITLE_TOP": "SPLICE",
@@ -165,6 +180,21 @@ const TRANSLATIONS: Dictionary = {
 		"A11Y_SHAKE_OFF": "Shake: OFF",
 		"A11Y_COLORBLIND_ON": "Colorblind: ON",
 		"A11Y_COLORBLIND_OFF": "Colorblind: OFF",
+		"SETTINGS_TITLE": "SETTINGS",
+		"SETTINGS_MUSIC": "MUSIC",
+		"SETTINGS_SFX": "SFX EFFECTS",
+		"SETTINGS_LANGUAGE": "LANGUAGE",
+		"SETTINGS_LANG_IT": "ITALIANO",
+		"SETTINGS_LANG_EN": "ENGLISH",
+		"SETTINGS_LEAVE_MATCH": "LEAVE MATCH",
+		"SETTINGS_PRIVACY_POLICY": "PRIVACY POLICY",
+		"SETTINGS_TERMS_OF_SERVICE": "TERMS OF SERVICE",
+		"SETTINGS_RESUME": "RESUME BRAWL",
+		"SETTINGS_CLOSE": "CLOSE",
+		"SETTINGS_MATCH_CONTINUES_HINT": "LIVE MATCH! You can be attacked!",
+		"SETTINGS_OPEN_WEB": "OPEN IN BROWSER",
+		"PRIVACY_TEXT": "SPLICE RUSH does not collect identifiable personal data. Play as a guest without mandatory registration. Saves and preferences are stored locally on your device in compliance with GDPR and COPPA. No data is shared with third parties for ad tracking.",
+		"TOS_TEXT": "SPLICE RUSH is a vertical free-to-play arena brawler. Monetization is strictly cosmetic (zero pay-to-win, no loot boxes with game advantages). Fair play required: cheats and exploits are prohibited. Target audience is 12+.",
 	}
 }
 
@@ -180,3 +210,9 @@ static func register_translations() -> void:
 			tr_res.add_message(StringName(msg_id), String(dict[msg_id]))
 		TranslationServer.add_translation(tr_res)
 	TranslationServer.set_locale("it")
+
+static func set_locale(locale_key: String) -> void:
+	TranslationServer.set_locale(locale_key)
+
+static func get_current_locale() -> String:
+	return TranslationServer.get_locale()
