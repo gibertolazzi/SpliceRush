@@ -307,8 +307,8 @@ func _stage_limb_preview() -> void:
 	p0.pos = Vector2(0.0, 6.0)
 	p0.prev_pos = p0.pos
 	p0.facing_angle = -PI * 0.5
-	p0.attack_cooldown = 99.0
-	var layout: Array[Vector2] = [Vector2(-2.6, 3.4), Vector2(2.4, 2.8), Vector2(0.4, 1.2)]
+	p0.attack_cooldown = 1.0 # First club swing lands about one second in.
+	var layout: Array[Vector2] = [Vector2(-2.6, 3.4), Vector2(2.4, 2.8), Vector2(0.4, 2.7)]
 	for i: int in range(1, 4):
 		var b: MatchServer.CombatantState = server.combatants[i]
 		b.pos = layout[i - 1]

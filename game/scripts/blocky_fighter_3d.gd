@@ -82,7 +82,8 @@ const CLUB_HOLD_DIR := Vector3(-0.38, 0.86, 0.34)
 const CLUB_WINDUP_DIR := Vector3(-0.25, 0.92, -0.55)
 const CLUB_SLAM_DIR := Vector3(0.12, -0.12, 1.0)
 const CLUB_LENGTH_SCALE: float = 1.35
-const GRAFT_LENGTH_SCALE: float = 1.12
+const GRAFT_ARM_LENGTH_SCALE: float = 1.15 # Foreign arms are a touch too long: reads as "not mine"
+const GRAFT_LEG_LENGTH_SCALE: float = 1.0  # Legs match so both feet reach the floor
 
 var limb_extra_roots: Dictionary = {} # StringName -> Node3D placed on the real joint
 var held_limb_node: Node3D
@@ -97,6 +98,7 @@ var _skel_to_pivot_rot := Basis.IDENTITY
 var _club_dir := CLUB_HOLD_DIR
 var _club_side: float = 1.0
 var _bonk_squash_timer: float = 0.0
+var _collapsed_bones: Dictionary = {} # bone index -> collapsed pose scale
 
 static var _shared_outline_mat: ShaderMaterial
 static var _shared_dark_mat: ShaderMaterial
@@ -268,6 +270,21 @@ func _clear_socket(socket: Node3D) -> void:
 func _set_bone_scale(bone_idx: int, s: Vector3) -> void:
 	if skeleton != null and bone_idx >= 0 and bone_idx < skeleton.get_bone_count():
 		skeleton.set_bone_pose_scale(bone_idx, s)
+		if s.is_equal_approx(Vector3.ONE):
+			_collapsed_bones.erase(bone_idx)
+		else:
+			_collapsed_bones[bone_idx] = s
+
+## Skeleton3D ignores pose changes made while it is outside the tree, and an idle fighter has
+## no animation track on its legs to refresh them. Re-applying the collapse every frame keeps
+## hidden limbs hidden however and whenever the fighter was set up.
+func _reassert_collapsed_bones() -> void:
+	if skeleton == null:
+		return
+	for bone_idx: Variant in _collapsed_bones.keys():
+		var s: Vector3 = _collapsed_bones[bone_idx] as Vector3
+		skeleton.set_bone_pose_scale(int(bone_idx), s * 1.01)
+		skeleton.set_bone_pose_scale(int(bone_idx), s)
 
 func play_shatter_vfx(local_pos: Vector3) -> void:
 	if STATUS_SHATTER_VFX == null or not is_inside_tree():
@@ -507,6 +524,7 @@ func _build_base_skeleton() -> void:
 	pivot.name = "Pivot"
 	add_child(pivot)
 	limb_extra_roots.clear()
+	_collapsed_bones.clear()
 	_graft_nodes.clear()
 	_grafts.clear()
 	_held_info.clear()
@@ -1002,7 +1020,8 @@ func _refresh_limb_extras() -> void:
 			var scene: PackedScene = info.get("scene") as PackedScene
 			var node: Node3D = LimbMeshLibrary.build_limb_node(scene, limb, info.get("tint", Color.WHITE) as Color, float(info.get("tint_amount", 1.0)))
 			var src_len: float = maxf(float(node.get_meta("limb_length", 0.2)), 0.001)
-			node.scale = Vector3.ONE * (_native_limb_length(limb) * GRAFT_LENGTH_SCALE / src_len)
+			var graft_scale: float = GRAFT_ARM_LENGTH_SCALE if is_arm else GRAFT_LEG_LENGTH_SCALE
+			node.scale = Vector3.ONE * (_native_limb_length(limb) * graft_scale / src_len)
 			if is_arm:
 				node.rotation_degrees.z = 12.0 * side
 			root_n.add_child(node)
@@ -1066,6 +1085,10 @@ func _refresh_held_limb() -> void:
 	node.scale = Vector3.ONE * (want_len / (src_len * skel_scale))
 	attach.add_child(node)
 	held_limb_node = node
+
+## How far the body sinks when both legs are gone (negative, fighter-local units).
+func _legless_drop() -> float:
+	return -(_native_limb_length(LimbMeshLibrary.Limb.LEG_L) * _get_target_base_scale()) + 0.10
 
 ## Short squash when this fighter lands a club hit.
 func trigger_bonk_squash() -> void:
@@ -1441,6 +1464,8 @@ func update_visual_state(
 			if anim_player.is_playing():
 				anim_player.advance(dt)
 
+	_reassert_collapsed_bones()
+
 	# Club in hand: raise it and swing it overhead, layered on top of the walk cycle.
 	if held_limb_node != null and is_instance_valid(held_limb_node):
 		pivot.rotation_degrees.x = _update_club_pose(attack_timer, dt)
@@ -1464,8 +1489,9 @@ func update_visual_state(
 			pivot.position.y = -0.06 + absf(sin(_walk_phase * 1.6)) * 0.16
 			pivot.rotation_degrees.z = sin(_walk_phase * 1.6) * 13.0
 		elif has_severed_legs:
-			pivot.position.y = -0.12 + absf(sin(_walk_phase)) * 0.05
-			pivot.rotation_degrees.z = sin(_walk_phase) * 7.0
+			# No legs left: the torso sits on its sockets and bounces along like a ball.
+			pivot.position.y = _legless_drop() + absf(sin(_walk_phase * 1.5)) * 0.24
+			pivot.rotation_degrees.z = sin(_walk_phase * 1.5) * 9.0
 		elif is_guy_model:
 			# Energetic cartoon brawler bob for StatusFX Guy model
 			pivot.position.y = absf(sin(_walk_phase * 2.2)) * 0.08
@@ -1474,7 +1500,8 @@ func update_visual_state(
 			pivot.position.y = 0.0
 			pivot.rotation_degrees.z = 0.0
 	else:
-		pivot.position.y = lerpf(pivot.position.y, 0.0, minf(1.0, 12.0 * dt))
+		var rest_y: float = _legless_drop() if has_severed_legs else 0.0
+		pivot.position.y = lerpf(pivot.position.y, rest_y, minf(1.0, 12.0 * dt))
 		pivot.rotation_degrees.z = lerpf(pivot.rotation_degrees.z, 0.0, minf(1.0, 12.0 * dt))
 
 	# Grafted limbs are stiff foreign parts: they swing from the joint like a puppet's.

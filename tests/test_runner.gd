@@ -35,6 +35,14 @@ func _initialize() -> void:
 		"test_camera_follow_rotation_and_enemy_visibility",
 		"test_abomination_transformation_at_9_parts",
 		"test_in_game_settings_modal_non_pausing_and_realtime_combat",
+		"test_hp_thresholds_pop_limbs_off_as_real_drops",
+		"test_loose_limb_pickup_becomes_club_that_wears_out",
+		"test_loose_limb_reattaches_as_graft_when_limb_missing",
+		"test_ko_bursts_limbs_and_body_regrows_on_respawn",
+		"test_loose_limb_expires_and_bots_seek_clubs",
+		"test_limb_mesh_library_cuts_real_limbs_from_models",
+		"test_fighter_shows_club_grafts_and_sockets",
+		"test_dropped_pieces_render_real_limb_meshes",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -1358,4 +1366,357 @@ func test_in_game_settings_modal_non_pausing_and_realtime_combat() -> bool:
 	assert_true(p0.hp < initial_hp, "player_takes_damage_from_enemies_while_settings_modal_is_open")
 
 	arena_ctrl.free()
+	return true
+
+
+# ---------------------------------------------------------------------------
+# Dismemberment loop: limbs pop off, lie on the floor as real pieces, become clubs or grafts.
+# ---------------------------------------------------------------------------
+
+func _make_duel_server() -> MatchServer:
+	var srv := MatchServer.new()
+	srv.bots_enabled = false
+	root.add_child(srv)
+	srv.dropped_parts.clear()
+	for c: MatchServer.CombatantState in srv.combatants:
+		if c.id >= 2:
+			c.alive = false
+			c.respawn_timer = 999.0
+	var p: MatchServer.CombatantState = srv.combatants[0]
+	var bot: MatchServer.CombatantState = srv.combatants[1]
+	for c: MatchServer.CombatantState in [p, bot]:
+		c.slots = {
+			PartData.Slot.HEAD: &"base_head",
+			PartData.Slot.ARMS: &"base_fist",
+			PartData.Slot.LEGS: &"base_boots",
+			PartData.Slot.CORE: &"base_core",
+		}
+		srv._recalc_combatant_stats(c, false)
+	p.pos = Vector2(0.0, 0.0)
+	bot.pos = Vector2(1.2, 0.0)
+	bot.attack_cooldown = 999.0
+	return srv
+
+func test_hp_thresholds_pop_limbs_off_as_real_drops() -> bool:
+	# Arrange
+	var srv: MatchServer = _make_duel_server()
+	var p: MatchServer.CombatantState = srv.combatants[0]
+	var bot: MatchServer.CombatantState = srv.combatants[1]
+	var severed_events: Array[int] = []
+	srv.limb_severed.connect(func(victim_id: int, _att: int, slot: int, _pos: Vector2) -> void:
+		if victim_id == bot.id:
+			severed_events.append(slot)
+	)
+
+	# Act: one punch takes the bot from 70% to 52%, across the 66% threshold.
+	bot.hp = 70
+	p.attack_cooldown = 0.0
+	srv.step_simulation(1.0 / 30.0)
+
+	# Assert
+	assert_eq(bot.slots[PartData.Slot.ARMS], &"severed_one_arm", "first_threshold_pops_an_arm")
+	assert_eq(severed_events.size(), 1, "limb_severed_signal_emitted_once")
+	assert_eq(srv.dropped_parts.size(), 1, "popped_arm_lands_on_the_floor")
+	var arm_drop: MatchServer.DroppedPartState = srv.dropped_parts[0]
+	assert_eq(arm_drop.part_id, &"limb_arm", "drop_is_a_loose_arm")
+	assert_eq(arm_drop.is_limb, true, "drop_flagged_as_limb")
+	assert_eq(arm_drop.owner_id, bot.id, "loose_arm_remembers_its_owner")
+	assert_true(bot.damage_mult < 0.8, "one_armed_bot_hits_softer")
+
+	# Act: second threshold (33%) takes a leg.
+	srv.dropped_parts.clear()
+	bot.pos = Vector2(1.2, 0.0)
+	bot.vel = Vector2.ZERO
+	bot.hp = 36
+	p.attack_cooldown = 0.0
+	srv.step_simulation(1.0 / 30.0)
+
+	# Assert
+	assert_eq(bot.slots[PartData.Slot.LEGS], &"severed_one_leg", "second_threshold_pops_a_leg")
+	assert_eq(srv.dropped_parts[0].part_id, &"limb_leg", "drop_is_a_loose_leg")
+	assert_true(bot.speed_mult < 0.8, "one_legged_bot_is_slower")
+	assert_eq(bot.alive, true, "thresholds_do_not_kill")
+	srv.free()
+	return true
+
+func test_loose_limb_pickup_becomes_club_that_wears_out() -> bool:
+	# Arrange: a leg from fighter 3 lies under the player's feet.
+	var srv: MatchServer = _make_duel_server()
+	var p: MatchServer.CombatantState = srv.combatants[0]
+	var bot: MatchServer.CombatantState = srv.combatants[1]
+	bot.pos = Vector2(30.0, 0.0)
+	bot.max_hp = 5000
+	bot.hp = 5000
+	var stolen_before: int = p.stolen_parts_count
+	var drop: MatchServer.DroppedPartState = srv.spawn_dropped_part(&"limb_leg", p.pos, Vector2.ZERO, false, 3)
+	drop.spawn_time = srv.match_elapsed_sec - 1.0
+
+	# Act
+	srv.step_simulation(1.0 / 30.0)
+
+	# Assert: whole body, so the leg goes in the hand as a club.
+	assert_eq(p.held_limb_slot, int(PartData.Slot.LEGS), "whole_fighter_wields_the_leg")
+	assert_eq(p.held_limb_owner_id, 3, "club_keeps_its_owner")
+	assert_eq(p.held_limb_hits_left, srv.balance.limb_club_leg_hits, "club_starts_with_full_durability")
+	assert_eq(p.slots[PartData.Slot.LEGS], &"base_boots", "own_legs_untouched")
+	assert_true(is_equal_approx(p.damage_mult, srv.balance.limb_club_leg_damage_mult), "leg_club_boosts_damage")
+	assert_true(is_equal_approx(p.range_mult, srv.balance.limb_club_leg_range_mult), "leg_club_boosts_reach")
+	assert_eq(p.stolen_parts_count, stolen_before + 1, "stolen_limb_counts_toward_abomination")
+	assert_eq(srv.can_wield_limb(p), false, "cannot_stack_a_second_club")
+
+	# Act: swing until it breaks.
+	var bonks: Array[bool] = []
+	srv.limb_bonk.connect(func(_a: int, _t: int, _slot: int, _pos: Vector2, broke: bool) -> void:
+		bonks.append(broke)
+	)
+	var vel_after_first: float = 0.0
+	for i: int in range(srv.balance.limb_club_leg_hits):
+		bot.pos = Vector2(1.5, 0.0)
+		bot.vel = Vector2.ZERO
+		p.pos = Vector2.ZERO
+		p.attack_cooldown = 0.0
+		srv.step_simulation(1.0 / 30.0)
+		if i == 0:
+			vel_after_first = bot.vel.length()
+
+	# Assert
+	assert_eq(bonks.size(), srv.balance.limb_club_leg_hits, "every_club_hit_bonks")
+	assert_eq(bonks[bonks.size() - 1], true, "last_hit_breaks_the_club")
+	assert_eq(bonks[0], false, "first_hit_does_not_break_it")
+	assert_eq(p.held_limb_slot, -1, "broken_club_leaves_the_hand")
+	assert_true(is_equal_approx(p.damage_mult, 1.0), "damage_back_to_normal_after_break")
+	assert_true(vel_after_first > srv.balance.auto_attack_knockback * 2.0, "club_knockback_sends_target_flying")
+	srv.free()
+	return true
+
+func test_loose_limb_reattaches_as_graft_when_limb_missing() -> bool:
+	# Arrange: the player lost an arm; fighter 2's arm lies under their feet.
+	var srv: MatchServer = _make_duel_server()
+	var p: MatchServer.CombatantState = srv.combatants[0]
+	srv.combatants[1].pos = Vector2(30.0, 0.0)
+	p.slots[PartData.Slot.ARMS] = &"severed_one_arm"
+	srv._recalc_combatant_stats(p, false)
+	p.hp = 50
+	var body_changes: Array[int] = []
+	srv.combatant_body_changed.connect(func(id: int) -> void: body_changes.append(id))
+	var drop: MatchServer.DroppedPartState = srv.spawn_dropped_part(&"limb_arm", p.pos, Vector2.ZERO, false, 2)
+	drop.spawn_time = srv.match_elapsed_sec - 1.0
+
+	# Act
+	srv.step_simulation(1.0 / 30.0)
+
+	# Assert
+	assert_eq(p.slots[PartData.Slot.ARMS], &"base_fist", "missing_arm_is_restored")
+	assert_eq(p.held_limb_slot, -1, "reattached_limb_is_not_a_club")
+	assert_eq(int(p.graft_owners.get(&"arm_l", -1)), 2, "graft_remembers_foreign_owner")
+	assert_true(p.hp > 50, "reattaching_heals")
+	assert_true(is_equal_approx(p.damage_mult, 1.0), "arm_debuff_removed")
+	assert_true(body_changes.has(0), "body_changed_signal_for_visuals")
+
+	# Act: lose that arm again.
+	srv.dropped_parts.clear()
+	srv._sever_limb(p, srv.combatants[1], int(PartData.Slot.ARMS), Vector2.RIGHT)
+
+	# Assert: the graft falls off still belonging to fighter 2.
+	assert_eq(srv.dropped_parts[0].owner_id, 2, "severed_graft_keeps_original_owner")
+	assert_eq(p.graft_owners.has(&"arm_l"), false, "graft_record_cleared")
+
+	# Act: picking your own limb back up is not a theft.
+	var own: MatchServer.DroppedPartState = srv.spawn_dropped_part(&"limb_arm", p.pos, Vector2.ZERO, false, 0)
+	own.spawn_time = srv.match_elapsed_sec - 1.0
+	srv.dropped_parts.erase(srv.dropped_parts[0])
+	var stolen_before: int = p.stolen_parts_count
+	srv.step_simulation(1.0 / 30.0)
+
+	# Assert
+	assert_eq(p.slots[PartData.Slot.ARMS], &"base_fist", "own_arm_snaps_back")
+	assert_eq(p.graft_owners.has(&"arm_l"), false, "own_limb_is_not_a_graft")
+	assert_eq(p.stolen_parts_count, stolen_before, "own_limb_does_not_count_as_stolen")
+	srv.free()
+	return true
+
+func test_ko_bursts_limbs_and_body_regrows_on_respawn() -> bool:
+	# Arrange: the bot swings a club and wears a graft when it dies.
+	var srv: MatchServer = _make_duel_server()
+	var p: MatchServer.CombatantState = srv.combatants[0]
+	var bot: MatchServer.CombatantState = srv.combatants[1]
+	bot.held_limb_slot = int(PartData.Slot.ARMS)
+	bot.held_limb_owner_id = 5
+	bot.held_limb_hits_left = 3
+	bot.graft_owners[&"leg_r"] = 4
+
+	# Act
+	srv._handle_combatant_death(bot, p)
+
+	# Assert
+	var limb_drops: int = 0
+	var held_dropped: bool = false
+	for d: MatchServer.DroppedPartState in srv.dropped_parts:
+		if d.is_limb:
+			limb_drops += 1
+			if d.owner_id == 5:
+				held_dropped = true
+	assert_eq(limb_drops, srv.balance.ko_limb_burst_count + 1, "ko_drops_club_plus_burst_limbs")
+	assert_true(held_dropped, "held_club_falls_on_ko")
+	assert_eq(bot.held_limb_slot, -1, "dead_fighter_holds_nothing")
+	assert_true(PartCatalog.is_severed(bot.slots[PartData.Slot.ARMS]), "ko_burst_takes_an_arm")
+	assert_true(PartCatalog.is_severed(bot.slots[PartData.Slot.LEGS]), "ko_burst_takes_a_leg")
+
+	# Act: wait out the respawn.
+	bot.respawn_timer = 0.01
+	srv.step_simulation(1.0 / 30.0)
+
+	# Assert
+	assert_eq(bot.alive, true, "bot_respawned")
+	assert_eq(bot.slots[PartData.Slot.ARMS], &"base_fist", "arms_regrow_on_respawn")
+	assert_eq(bot.slots[PartData.Slot.LEGS], &"base_boots", "legs_regrow_on_respawn")
+	assert_eq(bot.graft_owners.is_empty(), true, "grafts_gone_after_respawn")
+	srv.free()
+	return true
+
+func test_loose_limb_expires_and_bots_seek_clubs() -> bool:
+	# Arrange
+	var srv: MatchServer = _make_duel_server()
+	var p: MatchServer.CombatantState = srv.combatants[0]
+	var bot: MatchServer.CombatantState = srv.combatants[1]
+	p.pos = Vector2(-14.0, 14.0)
+	bot.pos = Vector2(6.0, 6.0)
+	srv._power_part_timer = 20.0
+	var drop: MatchServer.DroppedPartState = srv.spawn_dropped_part(&"limb_arm", Vector2(8.0, 6.0), Vector2.ZERO, false, 0)
+
+	# Act
+	var decision: Dictionary = BotUtilityAI.decide_bot_input(bot, srv, srv.get_safe_bounds_xz())
+
+	# Assert: a whole-bodied bot walks over to grab a club.
+	assert_eq(decision["action"], &"collect_upgrade_part", "bot_goes_for_loose_limb")
+	assert_true((decision["move_input"] as Vector2).x > 0.5, "bot_moves_toward_the_limb")
+
+	# Arrange: the limb outlives its lifetime.
+	var expired: Array[int] = []
+	srv.part_expired.connect(func(id: int, _pos: Vector2) -> void: expired.append(id))
+	drop.spawn_time = srv.match_elapsed_sec - srv.balance.limb_drop_lifetime_sec - 0.5
+
+	# Act
+	srv.step_simulation(1.0 / 30.0)
+
+	# Assert
+	assert_eq(srv.dropped_parts.size(), 0, "old_limb_removed")
+	assert_eq(expired, [drop.id], "expiry_signal_emitted")
+
+	# Act: the floor never fills up with limbs.
+	for i: int in range(srv.balance.max_limb_drops + 5):
+		srv.spawn_dropped_part(&"limb_leg", Vector2(-10.0 + float(i) * 0.4, -10.0), Vector2.ZERO, false, 2)
+
+	# Assert
+	assert_true(srv.dropped_parts.size() <= srv.balance.max_limb_drops, "limb_drops_are_capped")
+	srv.free()
+	return true
+
+func test_limb_mesh_library_cuts_real_limbs_from_models() -> bool:
+	# Arrange / Act
+	var limb_set: Dictionary = LimbMeshLibrary.get_limb_set(BlockyFighter3D.MAN_CUTIE_SCENE)
+
+	# Assert: both arms, both legs and the head come out of the single skinned body.
+	for limb: int in [LimbMeshLibrary.Limb.ARM_L, LimbMeshLibrary.Limb.ARM_R, LimbMeshLibrary.Limb.LEG_L, LimbMeshLibrary.Limb.LEG_R, LimbMeshLibrary.Limb.HEAD]:
+		assert_true(limb_set.has(limb), "limb_%d_extracted" % limb)
+	var arm: Dictionary = limb_set[LimbMeshLibrary.Limb.ARM_L]
+	var arm_mesh: ArrayMesh = arm["mesh"] as ArrayMesh
+	assert_true(arm_mesh.surface_get_array_len(0) >= 300, "arm_has_real_geometry")
+	assert_true(float(arm["length"]) > 0.05, "arm_length_measured")
+	var aabb: AABB = arm_mesh.get_aabb()
+	assert_true(aabb.position.y < -0.05 and aabb.end.y < 0.08, "arm_hangs_down_from_its_joint")
+	assert_true(aabb.size.y > aabb.size.x and aabb.size.y > aabb.size.z, "arm_long_axis_is_vertical")
+	var leg: Dictionary = limb_set[LimbMeshLibrary.Limb.LEG_L]
+	assert_true(float(leg["length"]) > float(arm["length"]), "leg_longer_than_arm")
+	assert_true(LimbMeshLibrary.get_limb_set(BlockyFighter3D.MAN_CUTIE_SCENE) == limb_set, "limb_set_is_cached")
+
+	# A model without usable skin data still yields a stand-in limb instead of nothing.
+	var fallback: Node3D = LimbMeshLibrary.build_limb_node(BlockyFighter3D.GUY_SCENE, LimbMeshLibrary.Limb.ARM_L, Color.RED, 1.0)
+	assert_true(fallback.get_child_count() > 0, "fallback_limb_built")
+	fallback.free()
+	return true
+
+func test_fighter_shows_club_grafts_and_sockets() -> bool:
+	# Arrange
+	var fighter := BlockyFighter3D.new()
+	root.add_child(fighter)
+	var base_slots: Dictionary = {
+		PartData.Slot.HEAD: &"base_head",
+		PartData.Slot.ARMS: &"base_fist",
+		PartData.Slot.LEGS: &"base_boots",
+		PartData.Slot.CORE: &"base_core",
+	}
+	fighter.setup_fighter(1, true, Color(0.98, 0.18, 0.22), 1, base_slots, false)
+	var donor: Dictionary = {"scene": BlockyFighter3D.WOMAN_CUTIE_SCENE, "tint": Color(0.2, 0.9, 0.3), "tint_amount": 1.0}
+
+	# Act: a leg in the hand and a foreign arm on the left shoulder.
+	fighter.apply_body_state(int(PartData.Slot.LEGS), donor, {&"arm_l": donor})
+
+	# Assert
+	assert_true(fighter.held_limb_node != null, "club_node_in_hand")
+	assert_true(fighter.held_limb_node.get_parent() is BoneAttachment3D, "club_follows_the_hand_bone")
+	assert_true(fighter.held_limb_node.find_child("LimbMesh", true, false) != null, "club_is_a_real_limb_mesh")
+	assert_eq((fighter.limb_extra_roots[&"arm_l"] as Node3D).get_child_count(), 1, "graft_node_on_left_shoulder")
+	assert_true(fighter._collapsed_bones.has(fighter._bone_left_arm), "native_arm_hidden_under_graft")
+	fighter.update_visual_state(Vector2.ZERO, Vector2(3.0, 0.0), 0.0, 0.25, 0.0, true, 0.016)
+	assert_true(fighter._club_dir.is_normalized(), "club_pose_updates_during_swing")
+
+	# Act: club breaks, graft gone, both legs severed.
+	fighter.apply_body_state(-1, {}, {})
+	var legless: Dictionary = base_slots.duplicate()
+	legless[PartData.Slot.LEGS] = &"severed_legs"
+	fighter.apply_slots(legless, false, false)
+	fighter.update_visual_state(Vector2.ZERO, Vector2.ZERO, 0.0, 0.0, 0.0, true, 0.5)
+
+	# Assert
+	assert_true(fighter.held_limb_node == null, "club_removed_from_hand")
+	assert_eq(fighter._collapsed_bones.has(fighter._bone_left_arm), false, "native_arm_back_after_graft_removed")
+	assert_true((fighter.limb_extra_roots[&"leg_l"] as Node3D).get_child_count() > 0, "empty_socket_shown_for_missing_leg")
+	assert_true(fighter.is_limb_missing(&"leg_r") and fighter.is_limb_missing(&"leg_l"), "both_legs_reported_missing")
+	assert_true(fighter.pivot.position.y < -0.3, "legless_torso_drops_to_the_floor")
+	fighter.free()
+
+	# A fighter configured before it enters the tree: Skeleton3D does not flag pose changes
+	# made off-tree, and an idle fighter has no animation track on its legs to refresh them,
+	# so without the per-frame re-assert the collapsed leg bones would render at full size.
+	var idle_fighter := BlockyFighter3D.new()
+	idle_fighter.setup_fighter(3, true, Color.CYAN, 0, legless, false)
+	root.add_child(idle_fighter)
+	idle_fighter.update_visual_state(Vector2.ZERO, Vector2.ZERO, 0.0, 0.0, 0.0, true, 0.016)
+	assert_true(idle_fighter.skeleton.get_bone_global_pose(idle_fighter._bone_left_upleg).basis.get_scale().x < 0.01, "leg_bones_stay_collapsed_while_idle")
+	idle_fighter.free()
+	return true
+
+func test_dropped_pieces_render_real_limb_meshes() -> bool:
+	# Arrange
+	var ab := ArenaBuilder3D.new()
+	root.add_child(ab)
+	ab._init_vfx_pools()
+	var resolver_calls: Array[int] = []
+	ab.drop_owner_resolver = func(owner_id: int) -> Dictionary:
+		resolver_calls.append(owner_id)
+		return {"scene": BlockyFighter3D.MAN_OFFICER_SCENE, "tint": Color(0.1, 0.5, 1.0), "tint_amount": 1.0}
+
+	# Act: a loose arm from fighter 4 and an ownerless chainsaw arm.
+	ab.spawn_dropped_part_visual(501, &"limb_arm", int(PartData.Slot.ARMS), int(PartData.Rarity.COMMON), Vector2(1.0, 1.0), false, 4, true)
+	ab.spawn_dropped_part_visual(502, &"chainsaw_arm", int(PartData.Slot.ARMS), int(PartData.Rarity.EPIC), Vector2(3.0, 1.0), false)
+
+	# Assert
+	var limb_node: Node3D = ab.dropped_part_nodes[501] as Node3D
+	var limb_mesh: MeshInstance3D = limb_node.find_child("LimbMesh", true, false) as MeshInstance3D
+	assert_true(limb_mesh != null and limb_mesh.mesh is ArrayMesh, "loose_arm_is_an_extracted_mesh_not_a_box")
+	assert_eq(resolver_calls, [4], "drop_coloured_after_its_owner")
+	assert_eq(bool(limb_node.get_meta("lying")), true, "common_limb_lies_on_the_floor")
+	var saw_node: Node3D = ab.dropped_part_nodes[502] as Node3D
+	assert_true(saw_node.find_child("LimbMesh", true, false) != null, "chainsaw_drop_shows_the_arm_it_is_on")
+	assert_eq(bool(saw_node.get_meta("lying")), false, "rare_loot_hovers_in_its_beam")
+	assert_true(saw_node.get_node("RarityMarker").get_child_count() >= 3, "epic_rarity_reads_by_shape_and_beam")
+
+	# Act: comic text pops and returns to the pool.
+	var pool_before: int = ab.comic_text_pool.size()
+	ab.spawn_comic_text(Vector3(0.0, 2.0, 0.0), "BONK!", Color.YELLOW)
+	assert_eq(ab.comic_text_pool.size(), pool_before - 1, "comic_text_taken_from_pool")
+	ab.update_arena_vfx(1.0)
+	assert_eq(ab.comic_text_pool.size(), pool_before, "comic_text_returned_to_pool")
+	ab.free()
 	return true
