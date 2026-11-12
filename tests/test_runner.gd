@@ -25,6 +25,13 @@ func _initialize() -> void:
 		"test_combat_juice_and_stolen_flying_part",
 		"test_customization_hangar_stage_and_cards",
 		"test_expressive_face_and_toon_materials",
+		"test_statusfx_guy_character_model_and_sockets",
+		"test_statusfx_effects_overlay_and_vfx",
+		"test_statusfx_pedestal_aura_sphere_and_streaks",
+		"test_statusfx_attack_and_shooting_vfx",
+		"test_characters_collection_models_and_mixamo_rigs",
+		"test_reference_mockup_vertical_hud",
+		"test_ingame_character_visibility_and_walk_retargeting",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -701,10 +708,10 @@ func test_expressive_face_and_toon_materials() -> bool:
 	# Test Point 9: Big eyes, eyebrows, expressive mouth, toon shader, rim light, warmth boost and dark outline
 	var root: Node = (self as SceneTree).root
 
-	# 1. Test Player Fighter 0 (Hero)
+	# 1. Test Player Fighter 0 (Blocky Hero)
 	var hero := BlockyFighter3D.new()
 	root.add_child(hero)
-	hero.setup_fighter(0, false, Color.WHITE, 0)
+	hero.setup_fighter(0, false, Color.WHITE, 0, {}, false, BlockyFighter3D.CharacterModelType.BLOCKY_HERO)
 
 	# Verify face root and alignment
 	assert_true(hero.face_root != null, "hero_face_root_exists")
@@ -756,7 +763,7 @@ func test_expressive_face_and_toon_materials() -> bool:
 	var bot := BlockyFighter3D.new()
 	var bot_color := Color(0.95, 0.28, 0.28)
 	root.add_child(bot)
-	bot.setup_fighter(1, true, bot_color, 1)
+	bot.setup_fighter(1, true, bot_color, 1, {}, false, BlockyFighter3D.CharacterModelType.BLOCKY_HERO)
 
 	assert_eq(bot.is_bot, true, "bot_fighter_flag_set")
 	assert_true(bot.face_root != null, "bot_has_face_root")
@@ -766,4 +773,310 @@ func test_expressive_face_and_toon_materials() -> bool:
 
 	hero.free()
 	bot.free()
+	return true
+
+func test_statusfx_guy_character_model_and_sockets() -> bool:
+	# 1. Test Guy Model Instantiation from StatusFXFree
+	var guy_fighter := BlockyFighter3D.new()
+	root.add_child(guy_fighter)
+	var guy_color := Color(0.24, 0.58, 0.92)
+	guy_fighter.setup_fighter(2, true, guy_color, 2, {}, false, BlockyFighter3D.CharacterModelType.STATUSFX_GUY)
+
+	assert_eq(guy_fighter.character_model_type, BlockyFighter3D.CharacterModelType.STATUSFX_GUY, "statusfx_guy_type_set")
+	assert_true(guy_fighter.hero_instance != null, "guy_model_instance_exists")
+	assert_eq(guy_fighter.hero_instance.name, "GuyModel", "guy_model_instance_name_matches")
+
+	# Mesh and Skeleton assertions
+	assert_true(guy_fighter.char_mesh != null, "guy_char_mesh_exists")
+	assert_eq(guy_fighter.char_mesh.name, "Chest", "guy_mesh_named_chest")
+	assert_true(guy_fighter.skeleton != null, "guy_skeleton_exists")
+	assert_eq(guy_fighter.skeleton.get_bone_count(), 588, "guy_skeleton_has_588_bones")
+
+	# Sockets and Toon Shading
+	assert_true(guy_fighter.head_socket != null, "guy_head_socket_exists")
+	assert_true(guy_fighter.left_arm_socket != null, "guy_left_arm_socket_exists")
+	assert_true(guy_fighter.right_arm_socket != null, "guy_right_arm_socket_exists")
+	assert_true(guy_fighter.left_leg_socket != null, "guy_left_leg_socket_exists")
+	assert_true(guy_fighter.right_leg_socket != null, "guy_right_leg_socket_exists")
+	assert_true(guy_fighter.core_socket != null, "guy_core_socket_exists")
+
+	# Apply parts on Guy model
+	guy_fighter.apply_slots({
+		PartData.Slot.HEAD: &"laser_eye",
+		PartData.Slot.ARMS: &"chainsaw_arm",
+		PartData.Slot.LEGS: &"rocket_legs",
+		PartData.Slot.CORE: &"crown_core"
+	}, false, false)
+	assert_true(guy_fighter.head_socket.get_child_count() > 0, "guy_laser_eye_equipped")
+	assert_true(guy_fighter.right_arm_socket.get_child_count() > 0, "guy_chainsaw_arm_equipped")
+	assert_true(guy_fighter.right_leg_socket.get_child_count() > 0, "guy_rocket_legs_equipped")
+	assert_true(guy_fighter.core_socket.get_child_count() > 0, "guy_crown_core_equipped")
+
+	# Severed limbs
+	guy_fighter.apply_slots({
+		PartData.Slot.HEAD: &"base_head",
+		PartData.Slot.ARMS: &"severed_arms",
+		PartData.Slot.LEGS: &"severed_legs",
+		PartData.Slot.CORE: &"base_core"
+	}, false, false)
+	assert_true(guy_fighter.left_arm_socket.get_child_count() > 0, "guy_severed_arm_stump_present")
+	assert_true(guy_fighter.left_leg_socket.get_child_count() > 0, "guy_severed_leg_stump_present")
+
+	# Visual update animation: moving plays Walk, stationary plays Idle
+	guy_fighter.update_visual_state(Vector2(2.0, 3.0), Vector2(1.5, 0.0), 0.0, 0.0, 0.0, true, 0.016)
+	assert_eq(guy_fighter.anim_player.current_animation, "Walk", "guy_plays_walk_anim_when_moving")
+	guy_fighter.update_visual_state(Vector2(2.0, 3.0), Vector2.ZERO, 0.0, 0.0, 0.0, true, 0.016)
+	assert_eq(guy_fighter.anim_player.current_animation, "Idle", "guy_plays_idle_anim_when_stationary")
+
+	guy_fighter.free()
+	return true
+
+func test_statusfx_effects_overlay_and_vfx() -> bool:
+	var fighter := BlockyFighter3D.new()
+	root.add_child(fighter)
+	fighter.setup_fighter(0, false, Color.WHITE, 0)
+
+	# 1. Test status overlay material attached to char_mesh
+	assert_true(fighter.status_overlay_mat != null, "status_overlay_material_initialized")
+	assert_true(fighter.char_mesh.material_overlay is ShaderMaterial, "material_overlay_assigned_to_mesh")
+
+	# 2. Test Hurt Overlay Reaction
+	fighter.update_visual_state(Vector2.ZERO, Vector2.ZERO, 0.0, 0.0, 0.30, true, 0.016)
+	var hurt_amount: float = fighter.status_overlay_mat.get_shader_parameter("effect_amount")
+	assert_true(hurt_amount > 0.3, "hurt_triggers_status_overlay_amount")
+	var hurt_col: Color = fighter.status_overlay_mat.get_shader_parameter("primary_color")
+	assert_true(hurt_col.r > 0.8 and hurt_col.b < 0.3, "hurt_overlay_is_red_hot")
+
+	# 3. Test Transformation Burst Reaction
+	fighter.trigger_transform_pop()
+	fighter.update_visual_state(Vector2.ZERO, Vector2.ZERO, 0.0, 0.0, 0.0, true, 0.016)
+	var xform_amount: float = fighter.status_overlay_mat.get_shader_parameter("effect_amount")
+	assert_true(xform_amount > 0.5, "transform_pop_triggers_status_overlay_surge")
+
+	# 4. Test Abomination Pulse
+	fighter.is_abomination = true
+	fighter.update_visual_state(Vector2.ZERO, Vector2.ZERO, 0.0, 0.0, 0.0, true, 0.016)
+	var abom_amount: float = fighter.status_overlay_mat.get_shader_parameter("effect_amount")
+	assert_true(abom_amount > 0.2, "abomination_triggers_pulsing_overlay")
+
+	# 5. Test Shatter VFX instantiation
+	var before_children: int = fighter.pivot.get_child_count()
+	fighter.play_shatter_vfx(Vector3(0.0, 1.0, 0.0))
+	var after_children: int = fighter.pivot.get_child_count()
+	assert_true(after_children > before_children, "shatter_vfx_instantiated_into_pivot")
+
+	fighter.free()
+	return true
+
+func test_statusfx_pedestal_aura_sphere_and_streaks() -> bool:
+	var ab := ArenaBuilder3D.new()
+	root.add_child(ab)
+	var srv := MatchServer.new()
+	srv.bots_enabled = false
+	root.add_child(srv)
+
+	ab.build_from_server(srv)
+	assert_true(ab.power_cube_node != null, "pedestal_power_cube_node_exists")
+
+	# Check for aura sphere child on power_cube_node
+	var found_aura_sphere: bool = false
+	for c: Node in ab.power_cube_node.get_children():
+		if c is MeshInstance3D and (c as MeshInstance3D).mesh is SphereMesh:
+			var mat: Material = (c as MeshInstance3D).material_override
+			if mat is ShaderMaterial and (mat as ShaderMaterial).shader == ArenaBuilder3D.AURA_SPHERE_SHADER:
+				found_aura_sphere = true
+				break
+	assert_true(found_aura_sphere, "pedestal_power_cube_has_statusfx_aura_sphere")
+
+	# Check for ground streaks on pedestal
+	var ped: Node3D = ab.find_child("PowerPedestal", true, false) as Node3D
+	assert_true(ped != null, "power_pedestal_node_found")
+	var found_streaks: bool = false
+	for c: Node in ped.get_children():
+		if c is MeshInstance3D and (c as MeshInstance3D).mesh is QuadMesh:
+			var mat: Material = (c as MeshInstance3D).material_override
+			if mat is ShaderMaterial and (mat as ShaderMaterial).shader == ArenaBuilder3D.STREAKS_SHADER:
+				found_streaks = true
+				break
+	assert_true(found_streaks, "pedestal_has_statusfx_ground_streaks")
+
+	ab.free()
+	srv.free()
+	return true
+
+func test_statusfx_attack_and_shooting_vfx() -> bool:
+	var ab := ArenaBuilder3D.new()
+	root.add_child(ab)
+
+	# 1. Test muzzle flash pool and spawn
+	assert_eq(ab.active_statusfx_flashes.size(), 0, "no_flashes_initially")
+	ab.spawn_statusfx_muzzle_flash(Vector2(2.0, 3.0), Color(0.20, 0.90, 1.00))
+	assert_eq(ab.active_statusfx_flashes.size(), 1, "muzzle_flash_spawned")
+	var flash_item: Dictionary = ab.active_statusfx_flashes[0]
+	var flash_mesh: MeshInstance3D = flash_item["node"]
+	assert_true(flash_mesh.visible, "flash_node_visible")
+	var f_smat := flash_mesh.material_override as ShaderMaterial
+	assert_true(f_smat != null, "flash_has_shader_material")
+	var p_col: Color = f_smat.get_shader_parameter("primary_color")
+	assert_true(absf(p_col.r - 0.20) < 0.05 and absf(p_col.g - 0.90) < 0.05, "flash_color_matches_laser_cyan")
+
+	# 2. Test impact sphere pool and spawn
+	assert_eq(ab.active_statusfx_impacts.size(), 0, "no_impacts_initially")
+	ab.spawn_statusfx_impact(Vector2(4.0, 5.0), true, Color(1.0, 0.18, 0.58))
+	assert_eq(ab.active_statusfx_impacts.size(), 1, "statusfx_impact_spawned")
+	var imp_item: Dictionary = ab.active_statusfx_impacts[0]
+	var imp_mesh: MeshInstance3D = imp_item["node"]
+	assert_true(imp_mesh.visible, "impact_node_visible")
+	var i_smat := imp_mesh.material_override as ShaderMaterial
+	assert_true(i_smat != null, "impact_has_shader_material")
+	var i_col: Color = i_smat.get_shader_parameter("primary_color")
+	assert_true(absf(i_col.r - 1.0) < 0.05 and absf(i_col.g - 0.18) < 0.05, "impact_color_matches_abomination_magenta")
+	assert_true(imp_item["peak_scale"] > 2.0, "ko_impact_has_larger_peak_scale")
+
+	# 3. Test VFX update ticking and pool recycling
+	ab.update_arena_vfx(0.10)
+	assert_eq(ab.active_statusfx_flashes.size(), 0, "flash_recycled_after_ttl")
+	assert_true(imp_mesh.scale.x > 0.5, "impact_expanded_during_animation")
+	ab.update_arena_vfx(0.20)
+	assert_eq(ab.active_statusfx_impacts.size(), 0, "impact_recycled_after_ttl")
+
+	ab.free()
+	return true
+
+func test_characters_collection_models_and_mixamo_rigs() -> bool:
+	var models: Array = [
+		BlockyFighter3D.CharacterModelType.MAN_CUTIE,
+		BlockyFighter3D.CharacterModelType.MAN_OFFICER,
+		BlockyFighter3D.CharacterModelType.WOMAN_CUTIE,
+		BlockyFighter3D.CharacterModelType.WOMAN_OFFICER,
+	]
+	for m_type in models:
+		var fighter := BlockyFighter3D.new()
+		root.add_child(fighter)
+		fighter.setup_fighter(0, false, Color.WHITE, 0, {}, false, m_type)
+		assert_eq(fighter.character_model_type, m_type, "model_type_assigned")
+		assert_true(fighter.hero_instance != null, "hero_instance_instantiated")
+		assert_true(fighter.skeleton != null, "skeleton_found")
+		assert_eq(fighter.skeleton.get_bone_count(), 25, "mixamo_skeleton_has_25_bones")
+		assert_true(fighter.head_socket != null, "head_socket_exists")
+		assert_true(fighter.left_arm_socket != null, "left_arm_socket_exists")
+		assert_true(fighter.right_arm_socket != null, "right_arm_socket_exists")
+		assert_true(fighter.left_leg_socket != null, "left_leg_socket_exists")
+		assert_true(fighter.right_leg_socket != null, "right_leg_socket_exists")
+		assert_true(fighter.core_socket != null, "core_socket_exists")
+		assert_true(fighter.anim_player != null, "anim_player_exists")
+		assert_true(fighter.anim_player.has_animation("Walk"), "has_walk_anim")
+		assert_true(fighter.anim_player.has_animation("Idle"), "has_idle_anim")
+		assert_true(fighter.anim_player.has_animation("Attack"), "has_attack_anim")
+
+		# Apply parts on character model
+		fighter.apply_slots({
+			PartData.Slot.HEAD: &"laser_eye",
+			PartData.Slot.ARMS: &"chainsaw_arm",
+			PartData.Slot.LEGS: &"rocket_legs",
+			PartData.Slot.CORE: &"crown_core"
+		}, false, false)
+		assert_true(fighter.head_socket.get_child_count() > 0, "laser_eye_equipped")
+		assert_true(fighter.right_arm_socket.get_child_count() > 0, "chainsaw_arm_equipped")
+		assert_true(fighter.right_leg_socket.get_child_count() > 0, "rocket_legs_equipped")
+		assert_true(fighter.core_socket.get_child_count() > 0, "crown_core_equipped")
+
+		# Test animation triggers
+		fighter.update_visual_state(Vector2(2.0, 3.0), Vector2(1.5, 0.0), 0.0, 0.0, 0.0, true, 0.016)
+		assert_eq(fighter.anim_player.current_animation, "Walk", "plays_walk_when_moving")
+		fighter.update_visual_state(Vector2(2.0, 3.0), Vector2.ZERO, 0.0, 0.0, 0.0, true, 0.016)
+		assert_eq(fighter.anim_player.current_animation, "Idle", "plays_idle_when_stationary")
+		fighter.update_visual_state(Vector2(2.0, 3.0), Vector2.ZERO, 0.0, 0.20, 0.0, true, 0.016)
+		assert_eq(fighter.anim_player.current_animation, "Attack", "plays_attack_when_attacking")
+
+		fighter.free()
+	return true
+
+func test_reference_mockup_vertical_hud() -> bool:
+	var hud := VerticalHUD.new()
+	root.add_child(hud)
+	hud.size = Vector2(540.0, 960.0)
+
+	# Test timer capsule update
+	hud.on_match_time_updated(52.0)
+	assert_true(is_equal_approx(hud.time_remaining_sec, 52.0), "hud_time_remaining_set")
+
+	# Test kill count / stolen parts update
+	hud.on_stolen_parts_updated(5)
+	assert_eq(hud.stolen_parts_count, 5, "hud_stolen_parts_count_5")
+
+	# Test equipped slots
+	hud.on_player_slots_updated({
+		PartData.Slot.HEAD: &"laser_eye",
+		PartData.Slot.ARMS: &"chainsaw_arm",
+		PartData.Slot.LEGS: &"rocket_legs",
+		PartData.Slot.CORE: &"crown_core"
+	}, false, 100)
+	assert_eq(hud.equipped_slots[PartData.Slot.ARMS], &"chainsaw_arm", "equipped_chainsaw_arm")
+	assert_eq(hud.equipped_slots[PartData.Slot.LEGS], &"rocket_legs", "equipped_rocket_legs")
+
+	# Test overhead data assignment
+	hud.overhead_combatant_data.clear()
+	hud.overhead_combatant_data.append({
+		"screen_pos": Vector2(270.0, 480.0),
+		"is_player": true,
+		"is_bot": false,
+		"is_abomination": false,
+		"hp_ratio": 1.0,
+		"base_color": Color.WHITE,
+		"id": 0,
+	})
+	hud.overhead_combatant_data.append({
+		"screen_pos": Vector2(300.0, 350.0),
+		"is_player": false,
+		"is_bot": true,
+		"is_abomination": false,
+		"hp_ratio": 0.65,
+		"base_color": Color.CYAN,
+		"id": 1,
+	})
+	assert_eq(hud.overhead_combatant_data.size(), 2, "overhead_combatants_count_2")
+
+	# Verify redraw request queued cleanly
+	hud.queue_redraw()
+
+	hud.free()
+	return true
+
+func test_ingame_character_visibility_and_walk_retargeting() -> bool:
+	# 1. Verify Mixamo collection walk animation uses only 3D rotation tracks (no position explosions)
+	var walk_anim: Animation = BlockyFighter3D._get_or_build_mixamo_walk_anim()
+	assert_true(walk_anim != null, "mixamo_walk_anim_built")
+	assert_true(walk_anim.get_track_count() > 0, "mixamo_walk_anim_has_tracks")
+	var has_position_track: bool = false
+	for t: int in range(walk_anim.get_track_count()):
+		if walk_anim.track_get_type(t) == Animation.TYPE_POSITION_3D:
+			has_position_track = true
+			break
+	assert_true(not has_position_track, "mixamo_walk_anim_has_no_position_tracks")
+
+	# 2. Verify camera balance parameters are tuned for clear third-person brawler visibility
+	var balance_cfg: BalanceConfig = load("res://shared/default_balance.tres") as BalanceConfig
+	assert_true(balance_cfg != null, "balance_cfg_loaded")
+	assert_true(balance_cfg.camera_distance <= 6.0, "camera_distance_tuned_close")
+	assert_true(balance_cfg.camera_pitch_deg > -40.0, "camera_pitch_isometric_not_birds_eye")
+	assert_true(balance_cfg.camera_z_bias >= 3.4, "camera_z_bias_positions_player_foreground")
+
+	# 3. Verify fighter 0 model scale and sockets
+	var fighter := BlockyFighter3D.new()
+	root.add_child(fighter)
+	fighter.setup_fighter(0, false, Color.WHITE, 0, {}, false, BlockyFighter3D.CharacterModelType.MAN_CUTIE)
+	assert_true(fighter.hero_instance.scale.x >= 2.5, "fighter_hero_scale_chunky")
+	assert_true(fighter.visible, "fighter_is_visible")
+	assert_true(fighter.hero_instance.visible, "hero_instance_is_visible")
+
+	# Test walk animation maintains stable hips
+	var hips_idx: int = fighter.skeleton.find_bone("mixamorig_Hips")
+	var base_hips_origin: Vector3 = fighter.skeleton.get_bone_global_pose(hips_idx).origin
+	fighter.anim_player.play("Walk")
+	fighter.anim_player.seek(0.2, true)
+	var walking_hips_origin: Vector3 = fighter.skeleton.get_bone_global_pose(hips_idx).origin
+	assert_true(base_hips_origin.is_equal_approx(walking_hips_origin), "hips_pose_anchored_during_walk")
+
+	fighter.free()
 	return true

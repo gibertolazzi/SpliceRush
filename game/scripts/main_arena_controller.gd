@@ -7,6 +7,7 @@ var server: MatchServer
 var arena_builder: ArenaBuilder3D
 var sound_controller: SoundController
 const CustomizationMenuScript := preload("res://game/ui/customization_menu.gd")
+const STREAKS_SHADER := preload("res://StatusFXFree/assets/BinbunVFX_Vol2/StatusFX/shader/streaks.gdshader")
 
 var camera: Camera3D
 var hud: VerticalHUD
@@ -56,6 +57,8 @@ var _requested_map_theme: int = -1
 var _preview_tab_name: String = ""
 var _web_first_frame_reported: bool = false
 var _web_first_input_reported: bool = false
+var _preview_attack_vfx: bool = false
+var _camera_transitioning: bool = false
 
 func _ready() -> void:
 	_parse_cmdline_args()
@@ -104,6 +107,25 @@ func _ready() -> void:
 		server._recalc_combatant_stats(p0, true)
 		if not fighter_nodes.is_empty():
 			fighter_nodes[0].apply_slots(p0.slots, false, false)
+	if _preview_attack_vfx and not server.combatants.is_empty():
+		var p0: MatchServer.CombatantState = server.combatants[0]
+		p0.pos = Vector2(0.0, 3.2)
+		p0.prev_pos = p0.pos
+		p0.facing_angle = -PI * 0.5 # face upward toward target
+		p0.slots[PartData.Slot.HEAD] = &"laser_eye"
+		p0.slots[PartData.Slot.ARMS] = &"chainsaw_arm"
+		p0.slots[PartData.Slot.LEGS] = &"rocket_legs"
+		server._recalc_combatant_stats(p0, true)
+		if not fighter_nodes.is_empty():
+			fighter_nodes[0].apply_slots(p0.slots, false, false)
+			fighter_nodes[0].update_visual_state(p0.pos, Vector2.ZERO, p0.facing_angle, 0.25, 0.0, true, 0.016)
+		if server.combatants.size() > 1:
+			var bot1: MatchServer.CombatantState = server.combatants[1]
+			bot1.pos = Vector2(0.0, 0.4)
+			bot1.prev_pos = bot1.pos
+			if fighter_nodes.size() > 1:
+				fighter_nodes[1].update_visual_state(bot1.pos, Vector2.ZERO, PI * 0.5, 0.0, 0.25, true, 0.016)
+			_on_server_attack_performed(0, 1, p0.pos, bot1.pos, 35)
 	if _preview_tutorial_phase2 and hud != null:
 		hud.intro_tutorial_timer = 2.4
 		hud._intro_elapsed = 3.6
@@ -115,6 +137,13 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	Engine.time_scale = 1.0
+	for fx: MeshInstance3D in attack_fx_pool:
+		if is_instance_valid(fx):
+			fx.material_override = null
+	for item: Dictionary in active_attack_fx:
+		var fx: MeshInstance3D = item.get("node")
+		if fx != null and is_instance_valid(fx):
+			fx.material_override = null
 
 func _parse_cmdline_args() -> void:
 	var all_args: Array[String] = []
@@ -137,6 +166,9 @@ func _parse_cmdline_args() -> void:
 			_preview_clip = true
 		elif arg == "--preview-steal-juice":
 			_preview_steal_juice = true
+		elif arg == "--preview-attack-vfx":
+			_preview_attack_vfx = true
+			_skip_customize = true
 		elif arg == "--preview-tutorial-phase2":
 			_preview_tutorial_phase2 = true
 		elif arg == "--preview-tutorial-dismissed":
@@ -156,6 +188,12 @@ func _parse_cmdline_args() -> void:
 			_preview_customize = true
 		elif arg == "--skip-customize" or arg == "--instant-match":
 			_skip_customize = true
+		elif arg == "--use-blocky-hero":
+			BlockyFighter3D.default_model_type = BlockyFighter3D.CharacterModelType.BLOCKY_HERO
+		elif arg == "--use-statusfx-guy" or arg == "--statusfx-models" or arg == "--guy-model":
+			BlockyFighter3D.default_model_type = BlockyFighter3D.CharacterModelType.STATUSFX_GUY
+		elif arg == "--use-characters" or arg == "--use-cutie" or arg == "--characters-models":
+			BlockyFighter3D.default_model_type = BlockyFighter3D.CharacterModelType.MAN_CUTIE
 
 func _setup_audio() -> void:
 	sound_controller = SoundController.new()
@@ -182,8 +220,9 @@ func _stage_viral_clip_moment() -> void:
 		server.dropped_parts.remove_at(0)
 		server.equip_part_on_combatant(0, &"chainsaw_arm")
 		server.part_picked_up.emit(d_id, 0, &"chainsaw_arm", int(PartData.Slot.ARMS), int(PartData.Rarity.EPIC), d_pos)
-	# Keep rocket legs & laser eye for iconic key-art silhouette after clip steal
-	p0.pos = Vector2(0.0, 4.4)
+	# Keep rocket legs & laser eye for iconic key-art silhouette after clip steal.
+	# Offset from the pedestal so the gold cube does not sit on the hero's head.
+	p0.pos = Vector2(1.8, 5.2)
 	p0.prev_pos = p0.pos
 	p0.slots[PartData.Slot.LEGS] = &"rocket_legs"
 	p0.slots[PartData.Slot.HEAD] = &"laser_eye"
@@ -191,6 +230,8 @@ func _stage_viral_clip_moment() -> void:
 	if hud != null:
 		hud.intro_tutorial_timer = 0.0
 		hud._intro_elapsed = 6.0
+	if not fighter_nodes.is_empty() and fighter_nodes[0].transform_burst_ring != null:
+		fighter_nodes[0].transform_burst_ring.visible = false
 
 func _stage_steal_juice_scenario() -> void:
 	_stage_viral_clip_moment()
@@ -208,32 +249,46 @@ func _setup_environment_and_lights() -> void:
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.38, 0.26, 0.92)     # #6B4EFF saturated violet-blue
-	sky_mat.sky_horizon_color = Color(0.56, 0.42, 0.88) # Lavender-violet horizon
-	sky_mat.ground_horizon_color = Color(0.42, 0.28, 0.68)
-	sky_mat.ground_bottom_color = Color(0.14, 0.10, 0.28)
+	sky_mat.sky_top_color = Color(0.20, 0.14, 0.62)     # Deep violet-blue zenith
+	sky_mat.sky_horizon_color = Color(0.38, 0.26, 0.70) # Saturated lavender horizon
+	sky_mat.ground_horizon_color = Color(0.26, 0.19, 0.46)
+	sky_mat.ground_bottom_color = Color(0.08, 0.06, 0.16)
+	sky_mat.sky_curve = 0.12
+	sky_mat.sky_energy_multiplier = 0.85
 	sky.sky_material = sky_mat
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.46, 0.36, 0.68)
-	env.ambient_light_energy = 0.42
+	env.ambient_light_color = Color(0.36, 0.30, 0.56)
+	env.ambient_light_energy = 0.36
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_exposure = 0.90
+	env.adjustment_enabled = true
+	env.adjustment_saturation = 1.18
+	env.adjustment_contrast = 1.06
+	env.fog_enabled = true
+	env.fog_light_color = Color(0.34, 0.25, 0.52)
+	env.fog_light_energy = 0.28
+	env.fog_density = 0.0035
+	env.fog_sky_affect = 0.08
+	env.fog_aerial_perspective = 0.0
 	we.environment = env
 	add_child(we)
 
 	var sun := DirectionalLight3D.new()
 	sun.name = "SunLight"
-	sun.light_color = Color(1.0, 0.88, 0.76)
-	sun.light_energy = 0.88
-	sun.rotation_degrees = Vector3(-48.0, 26.0, 0.0)
-	sun.shadow_enabled = false
+	sun.light_color = Color(1.0, 0.85, 0.70)
+	sun.light_energy = 0.95
+	sun.rotation_degrees = Vector3(-42.0, 32.0, 0.0)
+	sun.shadow_enabled = true
+	sun.shadow_bias = 0.035
+	sun.directional_shadow_max_distance = 42.0
 	add_child(sun)
 
 	var rim_dir := DirectionalLight3D.new()
 	rim_dir.name = "RimLight"
-	rim_dir.light_color = Color(0.68, 0.38, 0.96)
-	rim_dir.light_energy = 0.32
-	rim_dir.rotation_degrees = Vector3(-32.0, -145.0, 0.0)
+	rim_dir.light_color = Color(0.55, 0.38, 0.95)
+	rim_dir.light_energy = 0.42
+	rim_dir.rotation_degrees = Vector3(-30.0, -145.0, 0.0)
 	rim_dir.shadow_enabled = false
 	add_child(rim_dir)
 
@@ -241,13 +296,15 @@ func _setup_camera() -> void:
 	camera = Camera3D.new()
 	camera.name = "ArenaCamera3D"
 	camera.fov = balance.camera_fov_deg
+	camera.keep_aspect = Camera3D.KEEP_WIDTH
 	camera.near = 0.2
 	camera.far = 95.0
 	if is_customizing:
 		camera.position = Vector3(0.0, 1.25, 3.45)
 		camera.rotation_degrees = Vector3(-7.0, 0.0, 0.0)
 	else:
-		camera.position = Vector3(0.0, balance.camera_distance, 15.0)
+		var start_z: float = 14.0 + balance.camera_z_bias
+		camera.position = Vector3(0.0, balance.camera_distance, start_z)
 		camera.rotation_degrees = Vector3(balance.camera_pitch_deg, 0.0, 0.0)
 	add_child(camera)
 	camera.make_current()
@@ -293,12 +350,15 @@ func _setup_server_and_world() -> void:
 	for i: int in range(8):
 		var fx := MeshInstance3D.new()
 		var bm := BoxMesh.new()
-		bm.size = Vector3(0.14, 0.14, 1.0)
+		bm.size = Vector3(0.18, 0.18, 1.0)
 		fx.mesh = bm
-		var mat := StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.albedo_color = Color(1.0, 0.85, 0.25)
-		fx.material_override = mat
+		if STREAKS_SHADER != null:
+			var mat := ShaderMaterial.new()
+			mat.shader = STREAKS_SHADER
+			mat.set_shader_parameter("primary_color", Color(1.0, 0.85, 0.25))
+			mat.set_shader_parameter("secondary_color", Color(1.0, 0.45, 0.15))
+			mat.set_shader_parameter("emission", 3.8)
+			fx.material_override = mat
 		fx.visible = false
 		add_child(fx)
 		attack_fx_pool.append(fx)
@@ -512,7 +572,7 @@ func _process(delta: float) -> void:
 		get_tree().quit(0)
 
 func _update_camera_follow(dt: float) -> void:
-	if is_customizing or server.combatants.is_empty():
+	if is_customizing or _camera_transitioning or server.combatants.is_empty():
 		return
 	var player_state: MatchServer.CombatantState = server.combatants[0]
 	var focus_pos: Vector2 = player_state.pos
@@ -566,9 +626,27 @@ func _on_server_state_ticked(time_left: float) -> void:
 
 func _on_server_attack_performed(attacker_id: int, target_id: int, from_xz: Vector2, to_xz: Vector2, _damage: int) -> void:
 	var is_ko: bool = (target_id >= 0 and target_id < server.combatants.size() and not server.combatants[target_id].alive)
+
+	var beam_col := Color(1.0, 0.85, 0.25) # Default golden spark
+	var sec_col := Color(1.0, 0.45, 0.15)
+	if attacker_id >= 0 and attacker_id < server.combatants.size():
+		var att: MatchServer.CombatantState = server.combatants[attacker_id]
+		if att.is_abomination:
+			beam_col = Color(1.0, 0.18, 0.58) # Abomination magenta
+			sec_col = Color(0.70, 0.10, 0.90) # Dark violet
+		elif att.slots.get(PartData.Slot.HEAD, &"") == &"laser_eye":
+			beam_col = Color(0.20, 0.90, 1.00) # Cyber cyan beam
+			sec_col = Color(0.10, 0.45, 1.00)
+		elif att.slots.get(PartData.Slot.ARMS, &"") == &"chainsaw_arm":
+			beam_col = Color(1.0, 0.55, 0.10) # Spark orange
+			sec_col = Color(1.0, 0.20, 0.05)
+		elif att.slots.get(PartData.Slot.ARMS, &"") == &"mega_claws":
+			beam_col = Color(0.95, 0.15, 0.25) # Crimson claw slash
+			sec_col = Color(0.50, 0.05, 0.10)
+
 	if arena_builder != null:
-		arena_builder.spawn_impact_star(to_xz, is_ko)
-		arena_builder.spawn_impact_debris(to_xz, 4 if is_ko else 2)
+		arena_builder.spawn_statusfx_muzzle_flash(from_xz, beam_col)
+		arena_builder.spawn_statusfx_impact(to_xz, is_ko, beam_col)
 
 	if attacker_id == 0:
 		if is_ko:
@@ -589,6 +667,10 @@ func _on_server_attack_performed(attacker_id: int, target_id: int, from_xz: Vect
 
 	if not attack_fx_pool.is_empty():
 		var fx: MeshInstance3D = attack_fx_pool.pop_back()
+		var smat := fx.material_override as ShaderMaterial
+		if smat != null:
+			smat.set_shader_parameter("primary_color", beam_col)
+			smat.set_shader_parameter("secondary_color", sec_col)
 		var mid: Vector2 = (from_xz + to_xz) * 0.5
 		var dist: float = maxf(from_xz.distance_to(to_xz), 0.4)
 		fx.visible = true
@@ -810,10 +892,17 @@ func _on_custom_play_pressed(slots: Dictionary, col: Color) -> void:
 
 	# Smooth camera sweep to arena battle view
 	var safe_b: Vector2 = server.get_safe_bounds_xz()
-	var target_z: float = clampf(balance.camera_z_bias, -safe_b.y + balance.camera_z_bias, safe_b.y + balance.camera_z_bias)
+	var p0_y: float = server.combatants[0].pos.y if not server.combatants.is_empty() else 0.0
+	var p0_x: float = server.combatants[0].pos.x if not server.combatants.is_empty() else 0.0
+	var target_z: float = clampf(p0_y + balance.camera_z_bias, -safe_b.y + balance.camera_z_bias, safe_b.y + balance.camera_z_bias)
+	var target_x: float = clampf(p0_x, -safe_b.x + 2.5, safe_b.x - 2.5)
+	_camera_transitioning = true
 	var tw := create_tween().set_parallel(true)
-	tw.tween_property(camera, "position", Vector3(0.0, balance.camera_distance, target_z), 0.85).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tw.tween_property(camera, "rotation_degrees:x", balance.camera_pitch_deg, 0.85).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(camera, "position", Vector3(target_x, balance.camera_distance, target_z), 0.75).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(camera, "rotation_degrees:x", balance.camera_pitch_deg, 0.75).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.finished.connect(func() -> void:
+		_camera_transitioning = false
+	)
 
 	if sound_controller != null:
 		sound_controller.play_steal_stinger()
