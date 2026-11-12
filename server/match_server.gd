@@ -16,6 +16,14 @@ signal match_restarted()
 signal map_theme_changed(theme: int)
 signal combatant_lives_changed(combatant_id: int, lives_left: int)
 signal combatant_eliminated(combatant_id: int, rank: int)
+## A limb popped off a fighter (HP threshold, club hit or KO burst).
+signal limb_severed(victim_id: int, attacker_id: int, slot: int, pos_xz: Vector2)
+## Held club or grafted limbs changed: the client re-reads the combatant state.
+signal combatant_body_changed(combatant_id: int)
+## A fighter hit someone with a held limb. `broke` is true when the club ran out of hits.
+signal limb_bonk(attacker_id: int, target_id: int, limb_slot: int, pos_xz: Vector2, broke: bool)
+## A loose limb on the floor timed out.
+signal part_expired(drop_id: int, pos_xz: Vector2)
 
 enum MapTheme {
 	VIOLET_RUINS = 0,
@@ -47,6 +55,9 @@ class DroppedPartState extends RefCounted:
 	var vel: Vector2 = Vector2.ZERO
 	var spawn_time: float = 0.0
 	var is_power_part: bool = false
+	var is_limb: bool = false
+	var owner_id: int = -1 # Fighter whose body this piece came from (-1 = arena spawn)
+	var lifetime_sec: float = -1.0 # <= 0 means it never expires
 
 class CombatantState extends RefCounted:
 	var id: int = 0
@@ -93,6 +104,12 @@ class CombatantState extends RefCounted:
 		PartData.Slot.LEGS: 0,
 		PartData.Slot.CORE: 0,
 	}
+	# Limb held in the hand as a club: -1 = none, else PartData.Slot.ARMS / LEGS.
+	var held_limb_slot: int = -1
+	var held_limb_owner_id: int = -1
+	var held_limb_hits_left: int = 0
+	# Limbs reattached from another fighter: &"arm_l" / &"arm_r" / &"leg_l" / &"leg_r" -> owner id.
+	var graft_owners: Dictionary = {}
 
 const FIGHTER_PALETTE: Array[Color] = [
 	Color(0.50, 0.12, 0.88), # 0: Player Purple (Crown shirt)
@@ -392,7 +409,13 @@ func _spawn_initial_arena_drops() -> void:
 	spawn_dropped_part(&"chainsaw_arm", Vector2(-5.5, -4.5), Vector2.ZERO, false)
 	spawn_dropped_part(&"rocket_legs", Vector2(6.0, 5.5), Vector2.ZERO, false)
 
-func spawn_dropped_part(part_id: StringName, pos_xz: Vector2, pop_vel: Vector2 = Vector2.ZERO, is_power: bool = false) -> DroppedPartState:
+func get_drop_by_id(drop_id: int) -> DroppedPartState:
+	for d: DroppedPartState in dropped_parts:
+		if d.id == drop_id:
+			return d
+	return null
+
+func spawn_dropped_part(part_id: StringName, pos_xz: Vector2, pop_vel: Vector2 = Vector2.ZERO, is_power: bool = false, owner_id: int = -1) -> DroppedPartState:
 	var pdata: PartData = PartCatalog.get_part(part_id)
 	var drop := DroppedPartState.new()
 	drop.id = _next_drop_id
@@ -404,6 +427,11 @@ func spawn_dropped_part(part_id: StringName, pos_xz: Vector2, pop_vel: Vector2 =
 	drop.vel = pop_vel
 	drop.spawn_time = match_elapsed_sec
 	drop.is_power_part = is_power
+	drop.owner_id = owner_id
+	drop.is_limb = PartCatalog.is_limb(pdata.part_id)
+	if drop.is_limb:
+		drop.lifetime_sec = balance.limb_drop_lifetime_sec
+		_enforce_limb_drop_cap()
 	dropped_parts.append(drop)
 	part_dropped.emit(drop.id, drop.part_id, int(drop.slot), int(drop.rarity), drop.pos, drop.is_power_part)
 	return drop
@@ -429,6 +457,14 @@ func _recalc_combatant_stats(c: CombatantState, emit_signals: bool = true) -> vo
 	c.cooldown_mult = clampf(cd, 0.55, 1.35)
 	c.range_mult = clampf(rng, 0.85, 1.60)
 	c.pickup_mult = pick
+	# A held limb is a club: more reach and damage, applied after the part clamps.
+	if c.held_limb_slot == int(PartData.Slot.LEGS):
+		c.damage_mult *= balance.limb_club_leg_damage_mult
+		c.range_mult *= balance.limb_club_leg_range_mult
+		c.cooldown_mult *= balance.limb_club_leg_cooldown_mult
+	elif c.held_limb_slot == int(PartData.Slot.ARMS):
+		c.damage_mult *= balance.limb_club_arm_damage_mult
+		c.range_mult *= balance.limb_club_arm_range_mult
 
 	var prev_abom: bool = c.is_abomination
 	c.stolen_parts_count = int(c.collected_parts.get(PartData.Slot.ARMS, 0)) + int(c.collected_parts.get(PartData.Slot.LEGS, 0)) + int(c.collected_parts.get(PartData.Slot.CORE, 0))
@@ -453,13 +489,147 @@ func equip_part_on_combatant(combatant_id: int, part_id: StringName) -> bool:
 	var c: CombatantState = combatants[combatant_id]
 	var pdata: PartData = PartCatalog.get_part(part_id)
 	c.slots[pdata.slot] = pdata.part_id
+	_clear_grafts_for_slot(c, pdata.slot)
 	if c.collected_parts.has(pdata.slot):
 		c.collected_parts[pdata.slot] = mini(3, int(c.collected_parts.get(pdata.slot, 0)) + 1)
 	c.stolen_parts_count = int(c.collected_parts.get(PartData.Slot.ARMS, 0)) + int(c.collected_parts.get(PartData.Slot.LEGS, 0)) + int(c.collected_parts.get(PartData.Slot.CORE, 0))
 	c.transform_anim_timer = 0.48
 	c.hp = mini(c.max_hp, c.hp + balance.part_pickup_heal)
 	_recalc_combatant_stats(c, true)
+	combatant_body_changed.emit(c.id)
 	return true
+
+func _clear_grafts_for_slot(c: CombatantState, slot: PartData.Slot) -> void:
+	if slot == PartData.Slot.ARMS:
+		c.graft_owners.erase(&"arm_l")
+		c.graft_owners.erase(&"arm_r")
+	elif slot == PartData.Slot.LEGS:
+		c.graft_owners.erase(&"leg_l")
+		c.graft_owners.erase(&"leg_r")
+
+func _enforce_limb_drop_cap() -> void:
+	var limb_count: int = 0
+	for d: DroppedPartState in dropped_parts:
+		if d.is_limb:
+			limb_count += 1
+	var idx: int = 0
+	while limb_count >= balance.max_limb_drops and idx < dropped_parts.size():
+		var old: DroppedPartState = dropped_parts[idx]
+		if old.is_limb:
+			dropped_parts.remove_at(idx)
+			limb_count -= 1
+			part_expired.emit(old.id, old.pos)
+		else:
+			idx += 1
+
+func can_wield_limb(c: CombatantState) -> bool:
+	if c.slots.get(PartData.Slot.ARMS, &"base_fist") == &"severed_arms":
+		return false
+	return c.held_limb_slot < 0 or c.held_limb_hits_left <= 1
+
+## True when walking over this loose limb would do something for the fighter.
+func wants_limb_drop(c: CombatantState, drop: DroppedPartState) -> bool:
+	var cur: StringName = c.slots.get(drop.slot, &"base_fist") as StringName
+	if PartCatalog.is_severed(cur):
+		return true
+	return can_wield_limb(c)
+
+func _collect_limb(c: CombatantState, drop: DroppedPartState) -> void:
+	var cur: StringName = c.slots.get(drop.slot, &"base_fist") as StringName
+	var stolen: bool = drop.owner_id != c.id
+	if PartCatalog.is_severed(cur):
+		# Missing that limb: snap it back on. A foreign limb stays in its owner's colours.
+		var key: StringName = PartCatalog.limb_key_restored_on_attach(cur, drop.slot)
+		c.slots[drop.slot] = PartCatalog.get_restored_step(cur, drop.slot)
+		if stolen and drop.owner_id >= 0:
+			c.graft_owners[key] = drop.owner_id
+		else:
+			c.graft_owners.erase(key)
+		c.hp = mini(c.max_hp, c.hp + balance.part_pickup_heal)
+		_record_event(&"limb_reattached", c.id, drop.owner_id, c.pos)
+	else:
+		c.held_limb_slot = int(drop.slot)
+		c.held_limb_owner_id = drop.owner_id
+		c.held_limb_hits_left = balance.limb_club_leg_hits if drop.slot == PartData.Slot.LEGS else balance.limb_club_arm_hits
+		_record_event(&"limb_wielded", c.id, drop.owner_id, c.pos)
+	if stolen and c.collected_parts.has(drop.slot):
+		c.collected_parts[drop.slot] = mini(3, int(c.collected_parts.get(drop.slot, 0)) + 1)
+	c.transform_anim_timer = 0.48
+	_recalc_combatant_stats(c, true)
+	combatant_body_changed.emit(c.id)
+
+func _drop_held_limb(c: CombatantState, pop_dir: Vector2) -> void:
+	if c.held_limb_slot < 0:
+		return
+	var pid: StringName = PartCatalog.get_limb_part_for_slot(c.held_limb_slot as PartData.Slot)
+	var from_id: int = c.held_limb_owner_id
+	c.held_limb_slot = -1
+	c.held_limb_owner_id = -1
+	c.held_limb_hits_left = 0
+	spawn_dropped_part(pid, c.pos + pop_dir * 0.5, pop_dir * balance.limb_pop_speed, false, from_id)
+
+## Next limb to pop: arms and legs alternate. Thresholds never take the last arm or leg.
+func _pick_limb_slot_to_sever(victim: CombatantState, allow_last: bool) -> int:
+	var arms_lost: int = PartCatalog.count_lost_limbs(victim.slots.get(PartData.Slot.ARMS, &"base_fist") as StringName)
+	var legs_lost: int = PartCatalog.count_lost_limbs(victim.slots.get(PartData.Slot.LEGS, &"base_boots") as StringName)
+	var max_lost: int = 2 if allow_last else 1
+	if arms_lost <= legs_lost and arms_lost < max_lost:
+		return int(PartData.Slot.ARMS)
+	if legs_lost < max_lost:
+		return int(PartData.Slot.LEGS)
+	if arms_lost < max_lost:
+		return int(PartData.Slot.ARMS)
+	return -1
+
+## Pops one limb of `slot` off the victim and drops it on the floor as a real piece.
+func _sever_limb(victim: CombatantState, attacker: CombatantState, slot: int, pop_dir: Vector2) -> bool:
+	if slot != int(PartData.Slot.ARMS) and slot != int(PartData.Slot.LEGS):
+		return false
+	var slot_enum: PartData.Slot = slot as PartData.Slot
+	var cur: StringName = victim.slots.get(slot_enum, PartCatalog.get_base_part_for_slot(slot_enum)) as StringName
+	if PartCatalog.count_lost_limbs(cur) >= 2:
+		return false
+	var key: StringName = PartCatalog.limb_key_lost_on_sever(cur, slot_enum)
+	var base_pid: StringName = PartCatalog.get_base_part_for_slot(slot_enum)
+	var drop_pid: StringName = PartCatalog.get_limb_part_for_slot(slot_enum)
+	var is_special: bool = cur != base_pid and not PartCatalog.is_severed(cur) and not PartCatalog.is_limb(cur)
+	if is_special:
+		drop_pid = cur
+		if victim.collected_parts.has(slot_enum):
+			victim.collected_parts[slot_enum] = maxi(0, int(victim.collected_parts.get(slot_enum, 0)) - 1)
+	var from_id: int = int(victim.graft_owners.get(key, victim.id))
+	victim.graft_owners.erase(key)
+	victim.slots[slot_enum] = PartCatalog.get_severed_step(cur, slot_enum)
+
+	if pop_dir.length_squared() < 0.01:
+		pop_dir = Vector2.from_angle(_rng.randf_range(0.0, TAU))
+	var angle: float = pop_dir.angle() + _rng.randf_range(-0.55, 0.55)
+	var out_dir := Vector2(cos(angle), sin(angle))
+	spawn_dropped_part(drop_pid, victim.pos + out_dir * 0.55, out_dir * balance.limb_pop_speed, false, from_id)
+
+	# No arms left: whatever was held falls too.
+	if victim.slots.get(PartData.Slot.ARMS, &"base_fist") == &"severed_arms":
+		_drop_held_limb(victim, -out_dir)
+
+	_recalc_combatant_stats(victim, true)
+	_record_event(&"limb_severed", attacker.id if attacker != null else -1, victim.id, victim.pos)
+	limb_severed.emit(victim.id, attacker.id if attacker != null else -1, slot, victim.pos)
+	combatant_body_changed.emit(victim.id)
+	return true
+
+func _check_limb_break_thresholds(victim: CombatantState, attacker: CombatantState, hp_before: int) -> bool:
+	var max_hp_f: float = float(maxi(victim.max_hp, 1))
+	var before: float = float(hp_before) / max_hp_f
+	var after: float = float(victim.hp) / max_hp_f
+	var severed: bool = false
+	for ratio: float in balance.limb_break_hp_ratios:
+		if before > ratio and after <= ratio:
+			var slot: int = _pick_limb_slot_to_sever(victim, false)
+			if slot >= 0:
+				var dir: Vector2 = (victim.pos - attacker.pos).normalized() if attacker != null else Vector2.ZERO
+				if _sever_limb(victim, attacker, slot, dir):
+					severed = true
+	return severed
 
 func submit_client_input(combatant_id: int, move_vec: Vector2, ability_pressed: bool, attack_pressed: bool = false) -> void:
 	if combatant_id < 0 or combatant_id >= combatants.size():
@@ -535,11 +705,16 @@ func step_simulation(dt: float) -> void:
 				c.pos = _pick_spawn_pos(c.id)
 				c.prev_pos = c.pos
 				c.vel = Vector2.ZERO
-				# If limbs were severed, restore base limbs on fresh respawn
-				if PartCatalog.is_severed(c.slots.get(PartData.Slot.ARMS, &"")) and PartCatalog.is_severed(c.slots.get(PartData.Slot.LEGS, &"")):
-					c.slots[PartData.Slot.ARMS] = PartCatalog.get_base_part_for_slot(PartData.Slot.ARMS)
-					c.slots[PartData.Slot.LEGS] = PartCatalog.get_base_part_for_slot(PartData.Slot.LEGS)
+				# Fresh body on respawn: every missing limb grows back, grafts are gone.
+				var regrown: bool = not c.graft_owners.is_empty()
+				c.graft_owners.clear()
+				for limb_slot: PartData.Slot in [PartData.Slot.ARMS, PartData.Slot.LEGS]:
+					if PartCatalog.is_severed(c.slots.get(limb_slot, &"")):
+						c.slots[limb_slot] = PartCatalog.get_base_part_for_slot(limb_slot)
+						regrown = true
+				if regrown:
 					_recalc_combatant_stats(c, true)
+					combatant_body_changed.emit(c.id)
 				combatant_respawned.emit(c.id, c.pos)
 			continue
 
@@ -661,7 +836,10 @@ func _update_dropped_parts(dt: float) -> void:
 			drop.vel = drop.vel.move_toward(Vector2.ZERO, 14.0 * dt)
 
 		var age: float = absf(match_elapsed_sec - drop.spawn_time)
-		if age >= balance.part_pickup_grace_sec:
+		if drop.lifetime_sec > 0.0 and age >= drop.lifetime_sec:
+			dropped_parts.remove_at(idx)
+			part_expired.emit(drop.id, drop.pos)
+		elif age >= balance.part_pickup_grace_sec:
 			var collector: CombatantState = _find_collector_for_drop(drop)
 			if collector != null:
 				var drop_id: int = drop.id
@@ -670,7 +848,10 @@ func _update_dropped_parts(dt: float) -> void:
 				var prarity: int = int(drop.rarity)
 				var ppos: Vector2 = drop.pos
 				dropped_parts.remove_at(idx)
-				equip_part_on_combatant(collector.id, pid)
+				if drop.is_limb:
+					_collect_limb(collector, drop)
+				else:
+					equip_part_on_combatant(collector.id, pid)
 				_record_event(&"steal_pickup", collector.id, drop_id, ppos)
 				part_picked_up.emit(drop_id, collector.id, pid, pslot, prarity, ppos)
 		idx -= 1
@@ -688,7 +869,9 @@ func _find_collector_for_drop(drop: DroppedPartState) -> CombatantState:
 		var current_pid: StringName = c.slots.get(drop.slot, &"base_fist") as StringName
 		var current_part: PartData = PartCatalog.get_part(current_pid)
 		var should_equip: bool = false
-		if PartCatalog.is_severed(current_pid):
+		if drop.is_limb:
+			should_equip = wants_limb_drop(c, drop)
+		elif PartCatalog.is_severed(current_pid):
 			# Always prioritize equipping when limb is severed!
 			should_equip = true
 		elif int(drop.rarity) > int(current_part.rarity):
@@ -760,30 +943,30 @@ func _handle_combatant_death(victim: CombatantState, killer: CombatantState) -> 
 
 		var angle: float = _rng.randf_range(0.0, TAU) + float(dropped_count) * 2.1
 		var pop_vel := Vector2(cos(angle), sin(angle)) * balance.part_drop_pop_speed
-		spawn_dropped_part(drop_pid, victim.pos + Vector2(cos(angle), sin(angle)) * 0.45, pop_vel, false)
+		_clear_grafts_for_slot(victim, slot_to_drop)
+		spawn_dropped_part(drop_pid, victim.pos + Vector2(cos(angle), sin(angle)) * 0.45, pop_vel, false, victim.id)
 		dropped_count += 1
 
 	victim.stolen_parts_count = int(victim.collected_parts.get(PartData.Slot.ARMS, 0)) + int(victim.collected_parts.get(PartData.Slot.LEGS, 0)) + int(victim.collected_parts.get(PartData.Slot.CORE, 0))
 
 	if dropped_count == 0:
-		# If victim only had base parts, progressively sever one limb and drop a bonus part
-		var cur_leg: StringName = victim.slots.get(PartData.Slot.LEGS, &"base_boots")
-		var cur_arm: StringName = victim.slots.get(PartData.Slot.ARMS, &"base_fist")
-		if cur_leg != &"severed_one_leg" and cur_leg != &"severed_legs":
-			victim.slots[PartData.Slot.LEGS] = &"severed_one_leg"
-		elif cur_arm != &"severed_one_arm" and cur_arm != &"severed_arms":
-			victim.slots[PartData.Slot.ARMS] = &"severed_one_arm"
-		elif cur_leg == &"severed_one_leg":
-			victim.slots[PartData.Slot.LEGS] = &"severed_legs"
-		else:
-			victim.slots[PartData.Slot.ARMS] = &"severed_arms"
-
+		# Victim only had plain parts: a bonus part keeps the loot flowing.
 		var bonus_part: PartData = PartCatalog.pick_random_part(_rng, PartData.Rarity.RARE, PartData.Rarity.EPIC)
 		var angle: float = _rng.randf_range(0.0, TAU)
 		var pop_vel := Vector2(cos(angle), sin(angle)) * balance.part_drop_pop_speed
 		spawn_dropped_part(bonus_part.part_id, victim.pos, pop_vel, false)
 
+	# KO burst: the club in hand and a couple of limbs fly out. They grow back on respawn.
+	var away: Vector2 = (victim.pos - killer.pos).normalized() if killer != null else Vector2.ZERO
+	_drop_held_limb(victim, away if away.length_squared() > 0.01 else Vector2.RIGHT)
+	for _burst: int in range(balance.ko_limb_burst_count):
+		var burst_slot: int = _pick_limb_slot_to_sever(victim, true)
+		if burst_slot < 0:
+			break
+		_sever_limb(victim, killer, burst_slot, away.rotated(_rng.randf_range(-1.2, 1.2)))
+
 	_recalc_combatant_stats(victim, true)
+	combatant_body_changed.emit(victim.id)
 
 func _strip_single_part_from_combatant(victim: CombatantState, attacker: CombatantState) -> void:
 	var eligible: Array[PartData.Slot] = []
@@ -808,7 +991,8 @@ func _strip_single_part_from_combatant(victim: CombatantState, attacker: Combata
 		dir = Vector2.UP
 	var angle: float = dir.angle() + _rng.randf_range(-0.4, 0.4)
 	var pop_vel := Vector2(cos(angle), sin(angle)) * (balance.part_drop_pop_speed * 1.25)
-	spawn_dropped_part(drop_pid, victim.pos + dir * 0.4, pop_vel, false)
+	spawn_dropped_part(drop_pid, victim.pos + dir * 0.4, pop_vel, false, victim.id)
+	combatant_body_changed.emit(victim.id)
 	_record_event(&"part_stripped", attacker.id, victim.id, victim.pos)
 
 func _update_bot_input(bot: CombatantState, _dt: float) -> void:
@@ -855,21 +1039,46 @@ func _try_auto_attack(attacker: CombatantState, force_manual: bool = false) -> b
 		var dir: Vector2 = (target.pos - attacker.pos).normalized()
 		if dir.length_squared() > 0.001:
 			attacker.facing_angle = dir.angle()
+		var club_slot: int = attacker.held_limb_slot
+		var hp_before: int = target.hp
 		target.hp -= eff_damage
 		target.hurt_anim_timer = 0.18
 		if not attacker.is_bot and target.is_bot:
 			# Player hits stagger bots briefly (0.28s cooldown delay on bot)
 			target.attack_cooldown = maxf(target.attack_cooldown, 0.28)
-		target.vel += dir * balance.auto_attack_knockback * attacker.damage_mult
+		var kb: float = balance.auto_attack_knockback * attacker.damage_mult
+		if club_slot == int(PartData.Slot.LEGS):
+			kb = balance.auto_attack_knockback * balance.limb_club_leg_knockback_mult
+			attacker.attack_anim_timer = 0.30
+		elif club_slot == int(PartData.Slot.ARMS):
+			kb = balance.auto_attack_knockback * balance.limb_club_arm_knockback_mult
+			attacker.attack_anim_timer = 0.30
+		target.vel += dir * kb
 		if target.hp <= 0:
 			_handle_combatant_death(target, attacker)
 		else:
-			# Dynamic Part Snatch: 25% chance on high-damage attack to knock a piece straight off an opponent!
-			if eff_damage >= 18 and not target.is_abomination:
-				if _rng.randf() < 0.25:
+			# The body crumbles as HP drops: each threshold crossed pops a limb off.
+			var severed: bool = _check_limb_break_thresholds(target, attacker, hp_before)
+			if not severed:
+				if club_slot >= 0 and _rng.randf() < balance.limb_club_sever_chance:
+					_sever_limb(target, attacker, _pick_limb_slot_to_sever(target, true), dir)
+				elif eff_damage >= 18 and not target.is_abomination and _rng.randf() < 0.25:
+					# Dynamic Part Snatch: knock a special piece straight off an opponent.
 					_strip_single_part_from_combatant(target, attacker)
 			_record_event(&"attack", attacker.id, target.id, target.pos)
 		attack_performed.emit(attacker.id, target.id, attacker.pos, target.pos, eff_damage)
+		if club_slot >= 0:
+			# Clubs wear out: every landed hit costs one use.
+			attacker.held_limb_hits_left -= 1
+			var broke: bool = attacker.held_limb_hits_left <= 0
+			if broke:
+				attacker.held_limb_slot = -1
+				attacker.held_limb_owner_id = -1
+				attacker.held_limb_hits_left = 0
+				_recalc_combatant_stats(attacker, true)
+				combatant_body_changed.emit(attacker.id)
+			_record_event(&"limb_bonk", attacker.id, target.id, target.pos)
+			limb_bonk.emit(attacker.id, target.id, club_slot, target.pos, broke)
 		return true
 
 	var nearest_block_cell := Vector2i(9999, 9999)

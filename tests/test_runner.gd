@@ -58,6 +58,13 @@ func assert_true(cond: bool, label: String) -> void:
 		failed += 1
 		push_error("FAIL %s: expected true, got false" % label)
 
+func _special_drops(srv: MatchServer) -> Array[MatchServer.DroppedPartState]:
+	var out: Array[MatchServer.DroppedPartState] = []
+	for d: MatchServer.DroppedPartState in srv.dropped_parts:
+		if not d.is_limb:
+			out.append(d)
+	return out
+
 func test_i18n_translations() -> bool:
 	I18nService.register_translations()
 	TranslationServer.set_locale("it")
@@ -182,15 +189,16 @@ func test_part_drop_on_kill_and_pickup_transforms_body() -> bool:
 	srv.step_simulation(1.0 / 30.0)
 	assert_eq(bot.alive, false, "bot_killed_by_auto_attack")
 	assert_true(PartCatalog.is_severed(bot.slots[PartData.Slot.ARMS]), "dead_bot_lost_chainsaw_arm")
-	assert_eq(srv.dropped_parts.size(), 1, "one_part_dropped_on_kill")
-	var drop: MatchServer.DroppedPartState = srv.dropped_parts[0]
+	assert_eq(_special_drops(srv).size(), 1, "one_part_dropped_on_kill")
+	assert_true(srv.dropped_parts.size() > 1, "ko_also_bursts_loose_limbs")
+	var drop: MatchServer.DroppedPartState = _special_drops(srv)[0]
 	assert_eq(drop.part_id, &"chainsaw_arm", "dropped_part_is_chainsaw_arm")
 
 	var stolen_before: int = p.stolen_parts_count
 	for _i: int in range(10):
 		p.pos = drop.pos
 		srv.step_simulation(1.0 / 30.0)
-	assert_eq(srv.dropped_parts.size(), 0, "dropped_part_picked_up_from_ground")
+	assert_eq(_special_drops(srv).size(), 0, "dropped_part_picked_up_from_ground")
 	assert_eq(p.slots[PartData.Slot.ARMS], &"chainsaw_arm", "player_equipped_chainsaw_arm")
 	assert_eq(p.stolen_parts_count, stolen_before + 1, "stolen_parts_count_incremented")
 
@@ -230,7 +238,7 @@ func test_abomination_activation_and_triple_drop() -> bool:
 	assert_eq(bot.is_abomination, true, "becomes_abomination_with_4_rare_plus_parts")
 
 	srv._handle_combatant_death(bot, srv.combatants[0])
-	assert_eq(srv.dropped_parts.size(), 3, "abomination_drops_3_parts_on_death")
+	assert_eq(_special_drops(srv).size(), 3, "abomination_drops_3_parts_on_death")
 	assert_eq(bot.is_abomination, false, "abomination_lost_status_after_losing_parts")
 	srv.free()
 	return true
@@ -331,8 +339,9 @@ func test_3s_viral_clip_and_game_feel() -> bool:
 
 	# 2. Steal Chainsaw Arm within 3s -> Transform into Abomination + Stinger!
 	for _i: int in range(15):
-		if not srv.dropped_parts.is_empty():
-			p0.pos = srv.dropped_parts[srv.dropped_parts.size() - 1].pos
+		var specials: Array[MatchServer.DroppedPartState] = _special_drops(srv)
+		if not specials.is_empty():
+			p0.pos = specials[specials.size() - 1].pos
 		srv.step_simulation(1.0 / 30.0)
 	sc.play_steal_stinger()
 	sc.play_abomination_stinger()

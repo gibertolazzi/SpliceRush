@@ -44,6 +44,10 @@ static func decide_bot_input(
 		var rarity_gain: int = int(drop.rarity) - int(cur_part.rarity)
 		if PartCatalog.is_severed(cur_pid):
 			rarity_gain = 4 # Desperately seek replacement for severed limb!
+		elif drop.is_limb:
+			if not server.can_wield_limb(bot):
+				continue
+			rarity_gain = 2 # A loose limb is a club: worth a detour.
 		elif rarity_gain <= 0:
 			continue
 		var dist: float = bot.pos.distance_to(drop.pos)

@@ -117,6 +117,18 @@ static func _ensure_initialized() -> void:
 		Color(0.20, 0.18, 0.28), Color(0.35, 0.10, 0.15)
 	)
 
+	# LOOSE LIMBS: a plain arm/leg knocked off a fighter. Reattach it or swing it as a club.
+	_register(
+		&"limb_arm", &"PART_LIMB_ARM", PartData.Slot.ARMS, PartData.Rarity.COMMON,
+		&"limb_club", 1.0, 1.0, 1.0, 1.0, 12,
+		Color(0.92, 0.72, 0.62), Color(1.0, 0.82, 0.25)
+	)
+	_register(
+		&"limb_leg", &"PART_LIMB_LEG", PartData.Slot.LEGS, PartData.Rarity.COMMON,
+		&"limb_club", 1.0, 1.0, 1.0, 1.0, 12,
+		Color(0.92, 0.72, 0.62), Color(1.0, 0.82, 0.25)
+	)
+
 static func _register(
 	id: StringName,
 	tr_key: StringName,
@@ -196,6 +208,46 @@ static func get_severed_step(current_id: StringName, slot: PartData.Slot) -> Str
 		PartData.Slot.CORE:
 			return &"base_core"
 	return &"base_fist"
+
+static func is_limb(part_id: StringName) -> bool:
+	return part_id == &"limb_arm" or part_id == &"limb_leg"
+
+static func get_limb_part_for_slot(slot: PartData.Slot) -> StringName:
+	return &"limb_leg" if slot == PartData.Slot.LEGS else &"limb_arm"
+
+## How many limbs of this slot are missing (0, 1 or 2).
+static func count_lost_limbs(part_id: StringName) -> int:
+	match part_id:
+		&"severed_one_arm", &"severed_one_leg":
+			return 1
+		&"severed_arms", &"severed_legs":
+			return 2
+	return 0
+
+## Which body limb leaves when the slot is severed one more step.
+## Arms go left first, then right. Legs go right first, then left (matches the rig visuals).
+static func limb_key_lost_on_sever(current_id: StringName, slot: PartData.Slot) -> StringName:
+	var lost: int = count_lost_limbs(current_id)
+	if slot == PartData.Slot.ARMS:
+		return &"arm_l" if lost == 0 else &"arm_r"
+	return &"leg_r" if lost == 0 else &"leg_l"
+
+## Which body limb comes back when a loose limb is reattached (reverse order of loss).
+static func limb_key_restored_on_attach(current_id: StringName, slot: PartData.Slot) -> StringName:
+	var lost: int = count_lost_limbs(current_id)
+	if slot == PartData.Slot.ARMS:
+		return &"arm_r" if lost >= 2 else &"arm_l"
+	return &"leg_l" if lost >= 2 else &"leg_r"
+
+static func get_restored_step(current_id: StringName, slot: PartData.Slot) -> StringName:
+	match current_id:
+		&"severed_arms":
+			return &"severed_one_arm"
+		&"severed_legs":
+			return &"severed_one_leg"
+		&"severed_one_arm", &"severed_one_leg":
+			return get_base_part_for_slot(slot)
+	return current_id
 
 static func is_severed(part_id: StringName) -> bool:
 	return part_id == &"severed_arms" or part_id == &"severed_legs" or part_id == &"severed_one_arm" or part_id == &"severed_one_leg"
@@ -306,6 +358,8 @@ static func pick_random_part(rng: RandomNumberGenerator, min_rarity: int = PartD
 	var candidates: Array[PartData] = []
 	for p_var: Variant in _parts.values():
 		var p: PartData = p_var as PartData
+		if is_severed(p.part_id) or is_limb(p.part_id):
+			continue
 		if int(p.rarity) >= min_rarity and int(p.rarity) <= max_rarity:
 			candidates.append(p)
 	if candidates.is_empty():
