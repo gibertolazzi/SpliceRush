@@ -831,8 +831,8 @@ func test_statusfx_guy_character_model_and_sockets() -> bool:
 		PartData.Slot.LEGS: &"severed_legs",
 		PartData.Slot.CORE: &"base_core"
 	}, false, false)
-	assert_true(guy_fighter.left_arm_socket.get_child_count() > 0, "guy_severed_arm_stump_present")
-	assert_true(guy_fighter.left_leg_socket.get_child_count() > 0, "guy_severed_leg_stump_present")
+	assert_true((guy_fighter.limb_extra_roots[&"arm_l"] as Node3D).get_child_count() > 0, "guy_severed_arm_stump_present")
+	assert_true((guy_fighter.limb_extra_roots[&"leg_l"] as Node3D).get_child_count() > 0, "guy_severed_leg_stump_present")
 
 	# Visual update animation: moving plays Walk, stationary plays Idle
 	guy_fighter.update_visual_state(Vector2(2.0, 3.0), Vector2(1.5, 0.0), 0.0, 0.0, 0.0, true, 0.016)
@@ -1106,8 +1106,9 @@ func test_ingame_character_visibility_and_walk_retargeting() -> bool:
 	# 2. Verify camera balance parameters are tuned for clear third-person brawler visibility
 	var balance_cfg: BalanceConfig = load("res://shared/default_balance.tres") as BalanceConfig
 	assert_true(balance_cfg != null, "balance_cfg_loaded")
-	assert_true(balance_cfg.camera_distance <= 6.0, "camera_distance_tuned_close")
-	assert_true(balance_cfg.camera_pitch_deg > -40.0, "camera_pitch_isometric_not_birds_eye")
+	# Key-art framing: high angle (about 50 degrees down) so limbs on the floor and the fight around the player read.
+	assert_true(balance_cfg.camera_distance >= 7.0 and balance_cfg.camera_distance <= 10.0, "camera_distance_shows_arena_around_player")
+	assert_true(balance_cfg.camera_pitch_deg <= -45.0 and balance_cfg.camera_pitch_deg >= -65.0, "camera_pitch_high_angle_like_key_art")
 	assert_true(balance_cfg.camera_z_bias >= 3.4, "camera_z_bias_positions_player_foreground")
 
 	# 3. Verify fighter 0 model scale and sockets

@@ -12,6 +12,9 @@ var stream_steal_stinger: AudioStreamWAV
 var stream_abom_alarm: AudioStreamWAV
 var stream_dash: AudioStreamWAV
 var stream_equip_pop: AudioStreamWAV
+var stream_limb_pop: AudioStreamWAV
+var stream_bonk: AudioStreamWAV
+var stream_club_break: AudioStreamWAV
 var stream_music_loop: AudioStreamWAV
 
 var last_played_stinger: StringName = &""
@@ -77,6 +80,10 @@ func _synthesize_all_streams() -> void:
 	stream_abom_alarm = _make_synth_wav(0.55, [220.0, 440.0, 330.0, 660.0], false, false)
 	stream_dash = _make_synth_wav(0.14, [180.0, 520.0], true, false)
 	stream_equip_pop = _make_synth_wav(0.12, [520.0, 780.0, 1040.0], false, false)
+	# Limb comedy: rubbery "pop" when a limb comes off, low "bonk" for club hits, descending crack when a club breaks.
+	stream_limb_pop = _make_synth_wav(0.11, [880.0, 1320.0, 440.0], false, false)
+	stream_bonk = _make_synth_wav(0.16, [196.0, 98.0, 73.0], true, false)
+	stream_club_break = _make_synth_wav(0.20, [520.0, 390.0, 260.0, 130.0], true, false)
 	stream_music_loop = _make_synth_wav(1.60, [110.0, 130.81, 146.83, 164.81, 146.83, 130.81, 110.0, 98.0], false, true)
 
 func _make_synth_wav(duration_sec: float, freqs: Array[float], add_noise: bool, loop: bool) -> AudioStreamWAV:
@@ -156,6 +163,15 @@ func play_equip_sfx() -> void:
 
 func play_pickup_pop() -> void:
 	play_equip_sfx()
+
+func play_limb_pop_sfx() -> void:
+	_play_on_pool(stream_limb_pop, _rng.randf_range(0.92, 1.18), -5.0)
+
+func play_bonk_sfx() -> void:
+	_play_on_pool(stream_bonk, _rng.randf_range(0.85, 1.10), -2.0)
+
+func play_club_break_sfx() -> void:
+	_play_on_pool(stream_club_break, 1.0, -4.0)
 
 func set_music_intensity(mode: StringName) -> void:
 	current_music_mode = mode

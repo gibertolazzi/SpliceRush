@@ -64,13 +64,14 @@ var _preview_face_east: bool = false
 var _preview_face_south: bool = false
 var _preview_settings: bool = false
 var _preview_9parts: bool = false
+var _preview_limbs: bool = false
 var _camera_transitioning: bool = false
 
 func _ready() -> void:
 	_parse_cmdline_args()
 	if _preview_customize:
 		is_customizing = true
-	elif _simulate_input_preview or _preview_frenzy or _preview_last10s or _preview_result or _preview_clip or _preview_steal_juice or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1 or _preview_face_east or _preview_face_south or _preview_settings or _preview_9parts:
+	elif _preview_limbs or _simulate_input_preview or _preview_frenzy or _preview_last10s or _preview_result or _preview_clip or _preview_steal_juice or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1 or _preview_face_east or _preview_face_south or _preview_settings or _preview_9parts:
 		is_customizing = false
 	else:
 		is_customizing = true
@@ -152,6 +153,8 @@ func _ready() -> void:
 		if hud != null:
 			hud.on_collected_parts_updated(p0.collected_parts, p0.stolen_parts_count)
 			hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)
+	if _preview_limbs:
+		_stage_limb_preview()
 	if _preview_face_east and not server.combatants.is_empty():
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		p0.pos = Vector2(-1.5, 2.0)
@@ -235,6 +238,9 @@ func _parse_cmdline_args() -> void:
 		elif arg == "--preview-9parts":
 			_preview_9parts = true
 			_skip_customize = true
+		elif arg == "--preview-limbs":
+			_preview_limbs = true
+			_skip_customize = true
 		elif arg == "--preview-loading":
 			_preview_loading = true
 		elif arg == "--preview-one-leg":
@@ -289,6 +295,44 @@ func _stage_viral_clip_moment() -> void:
 	if not fighter_nodes.is_empty() and fighter_nodes[0].transform_burst_ring != null:
 		fighter_nodes[0].transform_burst_ring.visible = false
 
+## Screenshot staging for the dismemberment loop: club in hand, a graft, a hopping victim, limbs on the floor.
+func _stage_limb_preview() -> void:
+	if server.combatants.size() < 4:
+		return
+	server.bots_enabled = false
+	if hud != null:
+		hud.intro_tutorial_timer = 0.0
+		hud._intro_elapsed = 6.0
+	var p0: MatchServer.CombatantState = server.combatants[0]
+	p0.pos = Vector2(0.0, 6.0)
+	p0.prev_pos = p0.pos
+	p0.facing_angle = -PI * 0.5
+	p0.attack_cooldown = 99.0
+	var layout: Array[Vector2] = [Vector2(-2.6, 3.4), Vector2(2.4, 2.8), Vector2(0.4, 1.2)]
+	for i: int in range(1, 4):
+		var b: MatchServer.CombatantState = server.combatants[i]
+		b.pos = layout[i - 1]
+		b.prev_pos = b.pos
+		b.facing_angle = (p0.pos - b.pos).angle()
+		b.attack_cooldown = 99.0
+	for i: int in range(4, server.combatants.size()):
+		server.combatants[i].attack_cooldown = 99.0
+	# Bot 1 loses an arm and a leg, bot 2 an arm: their limbs land on the floor.
+	server._sever_limb(server.combatants[1], p0, int(PartData.Slot.ARMS), Vector2(0.4, 1.0))
+	server._sever_limb(server.combatants[1], p0, int(PartData.Slot.LEGS), Vector2(1.0, 0.6))
+	server._sever_limb(server.combatants[2], p0, int(PartData.Slot.ARMS), Vector2(-1.0, 0.8))
+	server._sever_limb(server.combatants[3], p0, int(PartData.Slot.LEGS), Vector2(-0.6, 1.0))
+	for d: MatchServer.DroppedPartState in server.dropped_parts:
+		d.lifetime_sec = -1.0
+	# The player swings bot 3's leg and wears bot 2's arm as a graft.
+	p0.held_limb_slot = int(PartData.Slot.LEGS)
+	p0.held_limb_owner_id = 3
+	p0.held_limb_hits_left = 5
+	p0.graft_owners[&"arm_l"] = 2
+	server._recalc_combatant_stats(p0, true)
+	for i: int in range(fighter_nodes.size()):
+		_apply_body_state(i)
+
 func _stage_steal_juice_scenario() -> void:
 	_stage_viral_clip_moment()
 	if hud != null:
@@ -305,25 +349,25 @@ func _setup_environment_and_lights() -> void:
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.20, 0.14, 0.62)     # Deep violet-blue zenith
-	sky_mat.sky_horizon_color = Color(0.38, 0.26, 0.70) # Saturated lavender horizon
-	sky_mat.ground_horizon_color = Color(0.26, 0.19, 0.46)
-	sky_mat.ground_bottom_color = Color(0.08, 0.06, 0.16)
+	sky_mat.sky_top_color = Color(0.26, 0.42, 0.96)     # Clear cartoon-blue zenith
+	sky_mat.sky_horizon_color = Color(0.66, 0.70, 1.0)  # Bright lavender horizon
+	sky_mat.ground_horizon_color = Color(0.58, 0.56, 0.94)
+	sky_mat.ground_bottom_color = Color(0.34, 0.30, 0.72)
 	sky_mat.sky_curve = 0.12
-	sky_mat.sky_energy_multiplier = 0.85
+	sky_mat.sky_energy_multiplier = 1.0
 	sky.sky_material = sky_mat
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.36, 0.30, 0.56)
-	env.ambient_light_energy = 0.36
+	env.ambient_light_color = Color(0.58, 0.50, 0.82)
+	env.ambient_light_energy = 0.42
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_exposure = 0.90
+	env.tonemap_exposure = 0.92
 	env.adjustment_enabled = true
 	env.adjustment_saturation = 1.18
 	env.adjustment_contrast = 1.06
 	env.fog_enabled = true
-	env.fog_light_color = Color(0.34, 0.25, 0.52)
-	env.fog_light_energy = 0.28
+	env.fog_light_color = Color(0.62, 0.60, 0.96)
+	env.fog_light_energy = 0.40
 	env.fog_density = 0.0035
 	env.fog_sky_affect = 0.08
 	env.fog_aerial_perspective = 0.0
@@ -332,8 +376,8 @@ func _setup_environment_and_lights() -> void:
 
 	var sun := DirectionalLight3D.new()
 	sun.name = "SunLight"
-	sun.light_color = Color(1.0, 0.85, 0.70)
-	sun.light_energy = 0.95
+	sun.light_color = Color(1.0, 0.88, 0.72)
+	sun.light_energy = 1.05
 	sun.rotation_degrees = Vector3(-42.0, 32.0, 0.0)
 	sun.shadow_enabled = true
 	sun.shadow_bias = 0.035
@@ -385,6 +429,7 @@ func _setup_server_and_world() -> void:
 	arena_builder = ArenaBuilder3D.new()
 	arena_builder.name = "ArenaBuilder3D"
 	add_child(arena_builder)
+	arena_builder.drop_owner_resolver = _resolve_fighter_visual_info
 	arena_builder.build_from_server(server)
 	arena_builder.visible = not is_customizing
 	if is_customizing:
@@ -463,6 +508,84 @@ func _setup_server_and_world() -> void:
 	server.combatant_eliminated.connect(_on_server_combatant_eliminated)
 	server.match_ended.connect(_on_server_match_ended)
 	server.match_restarted.connect(_on_server_match_restarted)
+	server.combatant_body_changed.connect(_on_server_combatant_body_changed)
+	server.limb_severed.connect(_on_server_limb_severed)
+	server.limb_bonk.connect(_on_server_limb_bonk)
+	server.part_expired.connect(_on_server_part_expired)
+
+## How a fighter's body pieces look once detached: its model and colours.
+func _resolve_fighter_visual_info(fighter_id: int) -> Dictionary:
+	if fighter_id < 0 or fighter_id >= fighter_nodes.size():
+		return {}
+	var fn: BlockyFighter3D = fighter_nodes[fighter_id]
+	return {
+		"scene": fn.get_model_scene(),
+		"tint": fn.base_color,
+		"tint_amount": fn.get_limb_tint_amount(),
+	}
+
+func _apply_body_state(combatant_id: int) -> void:
+	if combatant_id < 0 or combatant_id >= fighter_nodes.size() or combatant_id >= server.combatants.size():
+		return
+	var c: MatchServer.CombatantState = server.combatants[combatant_id]
+	var held: Dictionary = {}
+	if c.held_limb_slot >= 0:
+		held = _resolve_fighter_visual_info(c.held_limb_owner_id)
+		if held.is_empty():
+			held = _resolve_fighter_visual_info(combatant_id)
+	var grafts: Dictionary = {}
+	for key: Variant in c.graft_owners.keys():
+		var info: Dictionary = _resolve_fighter_visual_info(int(c.graft_owners[key]))
+		if not info.is_empty():
+			grafts[key] = info
+	fighter_nodes[combatant_id].apply_body_state(c.held_limb_slot, held, grafts)
+
+func _on_server_combatant_body_changed(combatant_id: int) -> void:
+	_apply_body_state(combatant_id)
+
+func _pick_comic(keys: Array[StringName]) -> String:
+	return tr(keys[randi() % keys.size()])
+
+func _on_server_limb_severed(victim_id: int, attacker_id: int, _slot: int, pos_xz: Vector2) -> void:
+	if arena_builder != null:
+		arena_builder.spawn_impact_sparks(pos_xz, 6)
+		arena_builder.spawn_dust_puff(Vector3(pos_xz.x, 0.9, pos_xz.y), 2, 0.3)
+		arena_builder.spawn_comic_text(Vector3(pos_xz.x, 2.6, pos_xz.y), _pick_comic([&"COMIC_LIMB_POP_1", &"COMIC_LIMB_POP_2", &"COMIC_LIMB_POP_3"]), Color(1.0, 0.95, 0.45), 0.9)
+	if sound_controller != null:
+		sound_controller.play_limb_pop_sfx()
+	if attacker_id == 0 or victim_id == 0:
+		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.35)
+		if attacker_id == 0:
+			trigger_hit_stop(0.06, 0.10)
+
+func _on_server_limb_bonk(attacker_id: int, target_id: int, limb_slot: int, pos_xz: Vector2, broke: bool) -> void:
+	if attacker_id >= 0 and attacker_id < fighter_nodes.size():
+		fighter_nodes[attacker_id].trigger_bonk_squash()
+	var is_ko: bool = target_id >= 0 and target_id < server.combatants.size() and not server.combatants[target_id].alive
+	if arena_builder != null:
+		arena_builder.spawn_impact_star(pos_xz, true)
+		var txt: String = tr(&"COMIC_KO") if is_ko else _pick_comic([&"COMIC_BONK_1", &"COMIC_BONK_2", &"COMIC_BONK_3", &"COMIC_BONK_4"])
+		var col: Color = Color(1.0, 0.30, 0.55) if limb_slot == int(PartData.Slot.LEGS) else Color(1.0, 0.72, 0.15)
+		arena_builder.spawn_comic_text(Vector3(pos_xz.x, 2.9, pos_xz.y), txt, col, 1.25 if attacker_id == 0 else 0.95)
+		if broke and attacker_id >= 0 and attacker_id < server.combatants.size():
+			var a_pos: Vector2 = server.combatants[attacker_id].pos
+			arena_builder.spawn_impact_debris(a_pos, 4)
+			arena_builder.spawn_comic_text(Vector3(a_pos.x, 3.3, a_pos.y), tr(&"COMIC_CLUB_BREAK"), Color(0.92, 0.92, 1.0), 0.85)
+	if sound_controller != null:
+		sound_controller.play_bonk_sfx()
+		if broke:
+			sound_controller.play_club_break_sfx()
+	if attacker_id == 0:
+		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.45)
+		trigger_hit_stop(0.075, 0.07)
+		if hud != null:
+			hud.trigger_impact_speed_lines(0.22)
+	elif target_id == 0:
+		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.40)
+
+func _on_server_part_expired(drop_id: int, pos_xz: Vector2) -> void:
+	if arena_builder != null:
+		arena_builder.expire_dropped_part_visual(drop_id, pos_xz)
 
 func _setup_ui() -> void:
 	var layer := CanvasLayer.new()
@@ -538,7 +661,7 @@ func _trigger_dash_juice() -> void:
 	if server == null or server.combatants.is_empty():
 		return
 	var p0: MatchServer.CombatantState = server.combatants[0]
-	if p0.dash_cooldown > 0.1 and p0.dash_timer <= 0.0:
+	if p0.dash_cooldown > 0.1:
 		return
 	var back_dir: Vector2 = -p0.vel.normalized() if p0.vel.length_squared() > 0.01 else -Vector2(cos(p0.facing_angle), sin(p0.facing_angle))
 	if arena_builder != null:
@@ -628,7 +751,7 @@ func _process(delta: float) -> void:
 
 	_update_camera_follow(delta)
 	_update_target_ring()
-	arena_builder.sync_dropped_parts(server.dropped_parts, delta)
+	arena_builder.sync_dropped_parts(server.dropped_parts, delta, server.match_elapsed_sec)
 	arena_builder.update_arena_vfx(delta, current_cam_yaw)
 	_update_attack_fx(delta)
 	if hud != null:
@@ -771,7 +894,10 @@ func _on_server_block_damaged(cell: Vector2i, remaining_hp: int, destroyed: bool
 	arena_builder.on_block_damaged(cell, remaining_hp, destroyed, world_xz)
 
 func _on_server_part_dropped(drop_id: int, part_id: StringName, slot: int, rarity: int, pos_xz: Vector2, is_power: bool) -> void:
-	arena_builder.spawn_dropped_part_visual(drop_id, part_id, slot, rarity, pos_xz, is_power)
+	var drop: MatchServer.DroppedPartState = server.get_drop_by_id(drop_id)
+	var owner_id: int = drop.owner_id if drop != null else -1
+	var popped: bool = drop != null and drop.vel.length_squared() > 0.5
+	arena_builder.spawn_dropped_part_visual(drop_id, part_id, slot, rarity, pos_xz, is_power, owner_id, popped)
 
 func _on_server_part_picked_up(drop_id: int, collector_id: int, part_id: StringName, slot: int, rarity: int, pos_xz: Vector2) -> void:
 	var collector_node: BlockyFighter3D = null
@@ -795,6 +921,15 @@ func _on_server_part_picked_up(drop_id: int, collector_id: int, part_id: StringN
 				_pending_combatant_slots.erase(collector_id)
 			else:
 				collector_node.trigger_transform_pop()
+			_apply_body_state(collector_id)
+
+		if PartCatalog.is_limb(part_id) and arena_builder != null and collector_id >= 0 and collector_id < server.combatants.size():
+			# Loose limb grabbed: either swung as a club or snapped back onto the body.
+			var cs: MatchServer.CombatantState = server.combatants[collector_id]
+			var comic_key: StringName = &"COMIC_REATTACH"
+			if cs.held_limb_slot == slot:
+				comic_key = &"COMIC_WIELD_LEG" if slot == int(PartData.Slot.LEGS) else &"COMIC_WIELD_ARM"
+			arena_builder.spawn_comic_text(Vector3(cs.pos.x, 3.1, cs.pos.y), tr(comic_key), Color(0.55, 1.0, 0.70), 1.1 if collector_id == 0 else 0.8)
 
 		if collector_id == 0:
 			camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.65)
@@ -860,8 +995,8 @@ func _on_server_map_theme_changed(theme: int) -> void:
 					sky_mat.sky_top_color = Color(0.22, 0.48, 0.86)
 					sky_mat.sky_horizon_color = Color(0.65, 0.78, 0.95)
 				_:
-					sky_mat.sky_top_color = Color(0.38, 0.26, 0.92)
-					sky_mat.sky_horizon_color = Color(0.56, 0.42, 0.88)
+					sky_mat.sky_top_color = Color(0.26, 0.42, 0.96)
+					sky_mat.sky_horizon_color = Color(0.66, 0.70, 1.0)
 
 func _on_server_combatant_lives_changed(combatant_id: int, lives: int) -> void:
 	if combatant_id == 0 and hud != null:
@@ -883,6 +1018,7 @@ func _on_server_match_restarted() -> void:
 		var c: MatchServer.CombatantState = server.combatants[i]
 		if i < fighter_nodes.size():
 			fighter_nodes[i].apply_slots(c.slots, c.is_abomination, false)
+			_apply_body_state(i)
 			fighter_nodes[i].update_visual_state(c.pos, c.vel, c.facing_angle, 0.0, 0.0, c.alive, 0.016)
 	if sound_controller != null:
 		sound_controller.set_music_intensity(&"normal")

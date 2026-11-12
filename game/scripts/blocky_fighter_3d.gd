@@ -75,6 +75,29 @@ var _bone_right_foot: int = -1
 var _walk_phase: float = 0.0
 var _transform_flash_timer: float = 0.0
 
+# --- Dismemberment visuals: stump sockets, grafted limbs and the limb held as a club ---
+const LIMB_KEYS: Array[StringName] = [&"arm_l", &"arm_r", &"leg_l", &"leg_r"]
+const CLUB_SWING_SEC: float = 0.30
+const CLUB_HOLD_DIR := Vector3(-0.38, 0.86, 0.34)
+const CLUB_WINDUP_DIR := Vector3(-0.25, 0.92, -0.55)
+const CLUB_SLAM_DIR := Vector3(0.12, -0.12, 1.0)
+const CLUB_LENGTH_SCALE: float = 1.35
+const GRAFT_LENGTH_SCALE: float = 1.12
+
+var limb_extra_roots: Dictionary = {} # StringName -> Node3D placed on the real joint
+var held_limb_node: Node3D
+var held_limb_slot: int = -1
+var _grafts: Dictionary = {} # StringName -> {"scene": PackedScene, "tint": Color, "tint_amount": float}
+var _held_info: Dictionary = {}
+var _graft_nodes: Dictionary = {} # StringName -> Node3D
+var _hand_attach_r: BoneAttachment3D
+var _hand_attach_l: BoneAttachment3D
+var _skel_to_pivot := Transform3D.IDENTITY
+var _skel_to_pivot_rot := Basis.IDENTITY
+var _club_dir := CLUB_HOLD_DIR
+var _club_side: float = 1.0
+var _bonk_squash_timer: float = 0.0
+
 static var _shared_outline_mat: ShaderMaterial
 static var _shared_dark_mat: ShaderMaterial
 static var _shared_shadow_mat: StandardMaterial3D
@@ -98,6 +121,41 @@ func _is_mixamo_collection_model() -> bool:
 		CharacterModelType.WOMAN_OFFICER
 	]
 
+## Which character model a fighter id gets when none is forced.
+static func model_type_for_fighter_id(id: int) -> CharacterModelType:
+	if default_model_type in [CharacterModelType.BLOCKY_HERO, CharacterModelType.STATUSFX_GUY]:
+		return default_model_type
+	if id == 0:
+		return default_model_type
+	var bot_models: Array[CharacterModelType] = [
+		CharacterModelType.MAN_CUTIE,
+		CharacterModelType.MAN_OFFICER,
+		CharacterModelType.WOMAN_CUTIE,
+		CharacterModelType.WOMAN_OFFICER,
+	]
+	return bot_models[id % bot_models.size()]
+
+static func scene_for_model_type(model_type: int) -> PackedScene:
+	match model_type:
+		CharacterModelType.BLOCKY_HERO:
+			return HERO_SCENE
+		CharacterModelType.STATUSFX_GUY:
+			return GUY_SCENE
+		CharacterModelType.MAN_OFFICER:
+			return MAN_OFFICER_SCENE
+		CharacterModelType.WOMAN_CUTIE:
+			return WOMAN_CUTIE_SCENE
+		CharacterModelType.WOMAN_OFFICER:
+			return WOMAN_OFFICER_SCENE
+	return MAN_CUTIE_SCENE
+
+func get_model_scene() -> PackedScene:
+	return scene_for_model_type(character_model_type)
+
+## How this fighter's loose limbs are coloured: bots wear their flat team colour, the player keeps the outfit.
+func get_limb_tint_amount() -> float:
+	return 0.0 if fighter_id == 0 else 1.0
+
 func setup_fighter(id: int, bot: bool, color: Color, a11y_shape: int, initial_slots: Dictionary = {}, abom: bool = false, model_type: int = -1) -> void:
 	fighter_id = id
 	is_bot = bot
@@ -107,18 +165,7 @@ func setup_fighter(id: int, bot: bool, color: Color, a11y_shape: int, initial_sl
 	if model_type >= 0:
 		character_model_type = model_type as CharacterModelType
 	else:
-		if default_model_type in [CharacterModelType.BLOCKY_HERO, CharacterModelType.STATUSFX_GUY]:
-			character_model_type = default_model_type
-		elif id == 0:
-			character_model_type = default_model_type
-		else:
-			var bot_models: Array[CharacterModelType] = [
-				CharacterModelType.MAN_CUTIE,
-				CharacterModelType.MAN_OFFICER,
-				CharacterModelType.WOMAN_CUTIE,
-				CharacterModelType.WOMAN_OFFICER,
-			]
-			character_model_type = bot_models[id % bot_models.size()]
+		character_model_type = model_type_for_fighter_id(id)
 	_walk_phase = float(id) * 0.85
 	_ensure_shared_materials()
 	_build_base_skeleton()
@@ -459,6 +506,14 @@ func _build_base_skeleton() -> void:
 	pivot = Node3D.new()
 	pivot.name = "Pivot"
 	add_child(pivot)
+	limb_extra_roots.clear()
+	_graft_nodes.clear()
+	_grafts.clear()
+	_held_info.clear()
+	held_limb_node = null
+	held_limb_slot = -1
+	_hand_attach_r = null
+	_hand_attach_l = null
 
 	# Soft circular ground shadow (replaces old clunky box shadow)
 	var shadow_mi := MeshInstance3D.new()
@@ -755,6 +810,8 @@ func _build_base_skeleton() -> void:
 	core_socket.position = Vector3(0.0, core_y, core_z)
 	pivot.add_child(core_socket)
 
+	_setup_limb_rig()
+
 	var bot_ind_y: float = 2.65 if is_mixamo_coll else (2.70 if is_guy else 2.55)
 	# Bot indicator shape overhead (Rule 5 & Rule 9)
 	bot_indicator_root = Node3D.new()
@@ -809,9 +866,250 @@ func apply_slots(new_slots: Dictionary, abom: bool, animate_pop: bool = true) ->
 		abomination_marker_root.visible = is_abomination
 	if abomination_ring != null:
 		abomination_ring.visible = false
+	if changed:
+		_refresh_limb_extras()
+		_refresh_held_limb()
 
 	if changed and animate_pop:
 		trigger_transform_pop()
+
+func _setup_limb_rig() -> void:
+	_skel_to_pivot = Transform3D.IDENTITY
+	if skeleton != null:
+		var walker: Node = skeleton
+		while walker != null and walker != pivot:
+			if walker is Node3D:
+				_skel_to_pivot = (walker as Node3D).transform * _skel_to_pivot
+			walker = walker.get_parent()
+	_skel_to_pivot_rot = _skel_to_pivot.basis.orthonormalized()
+
+	# Manual animation stepping lets the club pose be layered on top of the walk cycle.
+	if anim_player != null:
+		anim_player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
+
+	var fallback: Dictionary = {
+		&"arm_l": left_arm_socket.position,
+		&"arm_r": right_arm_socket.position,
+		&"leg_l": left_leg_socket.position,
+		&"leg_r": right_leg_socket.position,
+	}
+	for key: StringName in LIMB_KEYS:
+		var root_n := Node3D.new()
+		root_n.name = "LimbExtra_%s" % key
+		var bone: int = _limb_root_bone(key)
+		if skeleton != null and bone >= 0:
+			root_n.position = _skel_to_pivot * skeleton.get_bone_global_rest(bone).origin
+		else:
+			root_n.position = fallback[key] as Vector3
+		pivot.add_child(root_n)
+		limb_extra_roots[key] = root_n
+
+	if skeleton != null:
+		if _bone_right_hand >= 0:
+			_hand_attach_r = BoneAttachment3D.new()
+			_hand_attach_r.name = "HandAttachR"
+			skeleton.add_child(_hand_attach_r)
+			_hand_attach_r.bone_idx = _bone_right_hand
+		if _bone_left_hand >= 0:
+			_hand_attach_l = BoneAttachment3D.new()
+			_hand_attach_l.name = "HandAttachL"
+			skeleton.add_child(_hand_attach_l)
+			_hand_attach_l.bone_idx = _bone_left_hand
+
+func _limb_root_bone(key: StringName) -> int:
+	match key:
+		&"arm_l":
+			return _bone_left_arm
+		&"arm_r":
+			return _bone_right_arm
+		&"leg_l":
+			return _bone_left_upleg
+		&"leg_r":
+			return _bone_right_upleg
+	return -1
+
+func _limb_enum_for_key(key: StringName) -> int:
+	match key:
+		&"arm_l":
+			return LimbMeshLibrary.Limb.ARM_L
+		&"arm_r":
+			return LimbMeshLibrary.Limb.ARM_R
+		&"leg_l":
+			return LimbMeshLibrary.Limb.LEG_L
+	return LimbMeshLibrary.Limb.LEG_R
+
+func is_limb_missing(key: StringName) -> bool:
+	var arms: StringName = current_slots.get(PartData.Slot.ARMS, &"base_fist") as StringName
+	var legs: StringName = current_slots.get(PartData.Slot.LEGS, &"base_boots") as StringName
+	match key:
+		&"arm_l":
+			return arms == &"severed_one_arm" or arms == &"severed_arms"
+		&"arm_r":
+			return arms == &"severed_arms"
+		&"leg_r":
+			return legs == &"severed_one_leg" or legs == &"severed_legs"
+		&"leg_l":
+			return legs == &"severed_legs"
+	return false
+
+## Length of this fighter's own limb in pivot units (used to size clubs and grafts).
+func _native_limb_length(limb: int) -> float:
+	var model_scale: float = hero_instance.scale.x if hero_instance != null else 1.0
+	var scene: PackedScene = get_model_scene()
+	if LimbMeshLibrary.has_limb(scene, limb):
+		return LimbMeshLibrary.get_limb_length(scene, limb) * model_scale
+	var is_leg: bool = limb == LimbMeshLibrary.Limb.LEG_L or limb == LimbMeshLibrary.Limb.LEG_R
+	return 0.62 if is_leg else 0.50
+
+## Server body state -> visuals. `held` and each graft: {"scene", "tint", "tint_amount"}.
+func apply_body_state(new_held_slot: int, held: Dictionary, grafts: Dictionary) -> void:
+	var grafts_changed: bool = grafts.keys() != _grafts.keys()
+	if not grafts_changed:
+		for k: Variant in grafts.keys():
+			if (grafts[k] as Dictionary).get("scene") != (_grafts[k] as Dictionary).get("scene") or (grafts[k] as Dictionary).get("tint") != (_grafts[k] as Dictionary).get("tint"):
+				grafts_changed = true
+				break
+	if grafts_changed:
+		_grafts = grafts.duplicate(true)
+		# Re-run the slot visuals so bones hidden by an old graft come back, then hide the new ones.
+		_populate_arm_sockets(current_slots.get(PartData.Slot.ARMS, &"base_fist") as StringName)
+		_populate_leg_sockets(current_slots.get(PartData.Slot.LEGS, &"base_boots") as StringName)
+		_refresh_limb_extras()
+
+	var held_changed: bool = new_held_slot != held_limb_slot or held.get("scene") != _held_info.get("scene") or held.get("tint") != _held_info.get("tint")
+	held_limb_slot = new_held_slot
+	_held_info = held.duplicate()
+	if held_changed or (held_limb_slot >= 0 and held_limb_node == null):
+		_refresh_held_limb()
+
+func _refresh_limb_extras() -> void:
+	if limb_extra_roots.is_empty():
+		return
+	_graft_nodes.clear()
+	for key: StringName in LIMB_KEYS:
+		var root_n: Node3D = limb_extra_roots[key] as Node3D
+		for child: Node in root_n.get_children():
+			child.free()
+		var is_arm: bool = key == &"arm_l" or key == &"arm_r"
+		var side: float = 1.0 if (key == &"arm_l" or key == &"leg_l") else -1.0
+		if is_limb_missing(key):
+			_build_stump_socket(root_n, is_arm, side)
+		elif _grafts.has(key):
+			var info: Dictionary = _grafts[key]
+			var bone: int = _limb_root_bone(key)
+			_set_bone_scale(bone, Vector3(0.001, 0.001, 0.001))
+			var limb: int = _limb_enum_for_key(key)
+			var scene: PackedScene = info.get("scene") as PackedScene
+			var node: Node3D = LimbMeshLibrary.build_limb_node(scene, limb, info.get("tint", Color.WHITE) as Color, float(info.get("tint_amount", 1.0)))
+			var src_len: float = maxf(float(node.get_meta("limb_length", 0.2)), 0.001)
+			node.scale = Vector3.ONE * (_native_limb_length(limb) * GRAFT_LENGTH_SCALE / src_len)
+			if is_arm:
+				node.rotation_degrees.z = 12.0 * side
+			root_n.add_child(node)
+			_graft_nodes[key] = node
+
+## Empty toy-figure socket where a limb used to plug in (round, clean, no gore).
+func _build_stump_socket(root_n: Node3D, is_arm: bool, side: float) -> void:
+	var radius: float = 0.105 if is_arm else 0.125
+	var rim := MeshInstance3D.new()
+	var rim_mesh := CylinderMesh.new()
+	rim_mesh.top_radius = radius
+	rim_mesh.bottom_radius = radius
+	rim_mesh.height = 0.07
+	rim_mesh.radial_segments = 12
+	rim.mesh = rim_mesh
+	rim.material_override = _shared_white_mat
+	var hole := MeshInstance3D.new()
+	var hole_mesh := CylinderMesh.new()
+	hole_mesh.top_radius = radius * 0.58
+	hole_mesh.bottom_radius = radius * 0.58
+	hole_mesh.height = 0.08
+	hole_mesh.radial_segments = 10
+	hole.mesh = hole_mesh
+	hole.material_override = _shared_dark_mat
+	rim.add_child(hole)
+	if is_arm:
+		rim.rotation_degrees.z = 90.0
+		rim.position.x = 0.02 * side
+		hole.position.y = -0.012 * side
+	else:
+		rim.position.y = -0.03
+		hole.position.y = -0.012
+	root_n.add_child(rim)
+
+func _refresh_held_limb() -> void:
+	if held_limb_node != null and is_instance_valid(held_limb_node):
+		held_limb_node.free()
+	held_limb_node = null
+	if held_limb_slot < 0 or skeleton == null:
+		return
+	var arms: StringName = current_slots.get(PartData.Slot.ARMS, &"base_fist") as StringName
+	if arms == &"severed_arms":
+		return
+	# The chainsaw replaces the right arm, so the club goes in the left hand.
+	var use_left: bool = arms == &"chainsaw_arm"
+	var attach: BoneAttachment3D = _hand_attach_l if use_left else _hand_attach_r
+	if attach == null:
+		return
+	_club_side = -1.0 if use_left else 1.0
+	_club_dir = Vector3(CLUB_HOLD_DIR.x * _club_side, CLUB_HOLD_DIR.y, CLUB_HOLD_DIR.z)
+	var is_leg: bool = held_limb_slot == int(PartData.Slot.LEGS)
+	var limb: int = LimbMeshLibrary.Limb.LEG_L if is_leg else LimbMeshLibrary.Limb.ARM_L
+	var scene: PackedScene = _held_info.get("scene", get_model_scene()) as PackedScene
+	var node: Node3D = LimbMeshLibrary.build_limb_node(scene, limb, _held_info.get("tint", base_color) as Color, float(_held_info.get("tint_amount", 1.0)))
+	node.name = "HeldLimb"
+	var src_len: float = maxf(float(node.get_meta("limb_length", 0.2)), 0.001)
+	var want_len: float = _native_limb_length(limb) * CLUB_LENGTH_SCALE
+	var skel_scale: float = maxf(_skel_to_pivot.basis.get_scale().x, 0.0001)
+	# The limb hangs along -Y; flip it so it sticks out of the fist along the hand bone (+Y).
+	node.rotation = Vector3(0.0, 0.0, PI)
+	node.scale = Vector3.ONE * (want_len / (src_len * skel_scale))
+	attach.add_child(node)
+	held_limb_node = node
+
+## Short squash when this fighter lands a club hit.
+func trigger_bonk_squash() -> void:
+	_bonk_squash_timer = 0.14
+
+func _aim_bone_along(bone_idx: int, dir_pivot: Vector3) -> void:
+	if skeleton == null or bone_idx < 0:
+		return
+	var parent: int = skeleton.get_bone_parent(bone_idx)
+	var parent_global := Basis.IDENTITY
+	if parent >= 0:
+		parent_global = skeleton.get_bone_global_pose(parent).basis.orthonormalized()
+	var dir_skel: Vector3 = (_skel_to_pivot_rot.inverse() * dir_pivot).normalized()
+	var rest_global: Basis = parent_global * skeleton.get_bone_rest(bone_idx).basis.orthonormalized()
+	var arc := Quaternion(rest_global.y.normalized(), dir_skel)
+	var local: Basis = parent_global.inverse() * (Basis(arc) * rest_global)
+	skeleton.set_bone_pose_rotation(bone_idx, local.get_rotation_quaternion())
+
+## Raises the club arm and swings it overhead while an attack is playing.
+func _update_club_pose(attack_timer: float, dt: float) -> float:
+	var lean_deg: float = 0.0
+	var target: Vector3 = CLUB_HOLD_DIR
+	var rate: float = 14.0
+	if attack_timer > 0.0:
+		var p: float = clampf(1.0 - attack_timer / CLUB_SWING_SEC, 0.0, 1.0)
+		if p < 0.30:
+			target = CLUB_WINDUP_DIR
+			rate = 34.0
+			lean_deg = -10.0
+		elif p < 0.72:
+			target = CLUB_SLAM_DIR
+			rate = 46.0
+			lean_deg = 16.0
+	target = Vector3(target.x * _club_side, target.y, target.z)
+	_club_dir = _club_dir.lerp(target, minf(1.0, rate * dt)).normalized()
+	var upper: int = _bone_right_arm if _club_side > 0.0 else _bone_left_arm
+	var fore: int = _bone_right_forearm if _club_side > 0.0 else _bone_left_forearm
+	var hand: int = _bone_right_hand if _club_side > 0.0 else _bone_left_hand
+	_aim_bone_along(upper, _club_dir)
+	if fore >= 0:
+		skeleton.set_bone_pose_rotation(fore, skeleton.get_bone_rest(fore).basis.get_rotation_quaternion())
+	if hand >= 0:
+		skeleton.set_bone_pose_rotation(hand, skeleton.get_bone_rest(hand).basis.get_rotation_quaternion())
+	return lean_deg
 
 func trigger_transform_pop() -> void:
 	_transform_flash_timer = 0.32
@@ -924,11 +1222,7 @@ func _populate_arm_sockets(part_id: StringName) -> void:
 			_set_bone_scale(_bone_right_forearm, Vector3.ONE)
 			_set_bone_scale(_bone_right_hand, Vector3.ONE)
 
-			var socket_mat: ShaderMaterial = _shared_dark_mat
-			var spark_mat: StandardMaterial3D = _make_unshaded_mat(Color(1.0, 0.25, 0.20))
-			_add_box(left_arm_socket, Vector3(0.24, 0.22, 0.24), Vector3(0.0, -0.09, 0.0), socket_mat)
-			_add_box(left_arm_socket, Vector3(0.16, 0.08, 0.16), Vector3(0.0, -0.22, 0.0), spark_mat)
-			play_shatter_vfx(left_arm_socket.position)
+			play_shatter_vfx((limb_extra_roots[&"arm_l"] as Node3D).position if limb_extra_roots.has(&"arm_l") else left_arm_socket.position)
 
 		&"severed_arms":
 			# Hide skinned hero arms
@@ -939,15 +1233,8 @@ func _populate_arm_sockets(part_id: StringName) -> void:
 			_set_bone_scale(_bone_left_hand, Vector3(0.001, 0.001, 0.001))
 			_set_bone_scale(_bone_right_hand, Vector3(0.001, 0.001, 0.001))
 
-			# Severed Arm Stumps: dark mechanical bone sockets with raw sparking ends
-			var socket_mat: ShaderMaterial = _shared_dark_mat
-			var spark_mat: StandardMaterial3D = _make_unshaded_mat(Color(1.0, 0.25, 0.20))
-			_add_box(left_arm_socket, Vector3(0.24, 0.22, 0.24), Vector3(0.0, -0.09, 0.0), socket_mat)
-			_add_box(left_arm_socket, Vector3(0.16, 0.08, 0.16), Vector3(0.0, -0.22, 0.0), spark_mat)
-			_add_box(right_arm_socket, Vector3(0.24, 0.22, 0.24), Vector3(0.0, -0.09, 0.0), socket_mat)
-			_add_box(right_arm_socket, Vector3(0.16, 0.08, 0.16), Vector3(0.0, -0.22, 0.0), spark_mat)
-			play_shatter_vfx(left_arm_socket.position)
-			play_shatter_vfx(right_arm_socket.position)
+			# The empty toy sockets are drawn by _refresh_limb_extras on the real shoulder joints.
+			play_shatter_vfx((limb_extra_roots[&"arm_r"] as Node3D).position if limb_extra_roots.has(&"arm_r") else right_arm_socket.position)
 
 		&"chainsaw_arm":
 			# Left Arm: show natural muscular arm from 3D model with spiked wristband
@@ -1016,11 +1303,7 @@ func _populate_leg_sockets(part_id: StringName) -> void:
 			_set_bone_scale(_bone_left_leg, Vector3.ONE)
 			_set_bone_scale(_bone_left_foot, Vector3.ONE)
 
-			var peg_mat: ShaderMaterial = _shared_dark_mat
-			var warning_mat: StandardMaterial3D = _make_unshaded_mat(Color(1.0, 0.25, 0.20))
-			_add_box(right_leg_socket, Vector3(0.20, 0.20, 0.20), Vector3(0.0, -0.08, 0.0), peg_mat)
-			_add_box(right_leg_socket, Vector3(0.14, 0.06, 0.14), Vector3(0.0, -0.19, 0.0), warning_mat)
-			play_shatter_vfx(right_leg_socket.position)
+			play_shatter_vfx((limb_extra_roots[&"leg_r"] as Node3D).position if limb_extra_roots.has(&"leg_r") else right_leg_socket.position)
 
 		&"severed_legs":
 			# Hide skinned hero legs
@@ -1031,15 +1314,7 @@ func _populate_leg_sockets(part_id: StringName) -> void:
 			_set_bone_scale(_bone_left_foot, Vector3(0.001, 0.001, 0.001))
 			_set_bone_scale(_bone_right_foot, Vector3(0.001, 0.001, 0.001))
 
-			# Severed Leg Stumps: short mechanical pegs with warning hazard accents
-			var peg_mat: ShaderMaterial = _shared_dark_mat
-			var warning_mat: StandardMaterial3D = _make_unshaded_mat(Color(1.0, 0.25, 0.20))
-			_add_box(left_leg_socket, Vector3(0.20, 0.20, 0.20), Vector3(0.0, -0.08, 0.0), peg_mat)
-			_add_box(left_leg_socket, Vector3(0.14, 0.06, 0.14), Vector3(0.0, -0.19, 0.0), warning_mat)
-			_add_box(right_leg_socket, Vector3(0.20, 0.20, 0.20), Vector3(0.0, -0.08, 0.0), peg_mat)
-			_add_box(right_leg_socket, Vector3(0.14, 0.06, 0.14), Vector3(0.0, -0.19, 0.0), warning_mat)
-			play_shatter_vfx(left_leg_socket.position)
-			play_shatter_vfx(right_leg_socket.position)
+			play_shatter_vfx((limb_extra_roots[&"leg_l"] as Node3D).position if limb_extra_roots.has(&"leg_l") else left_leg_socket.position)
 
 		&"spring_legs":
 			_set_bone_scale(_bone_left_upleg, Vector3.ONE)
@@ -1163,6 +1438,12 @@ func update_visual_state(
 			else:
 				if anim_player.is_playing():
 					anim_player.pause()
+			if anim_player.is_playing():
+				anim_player.advance(dt)
+
+	# Club in hand: raise it and swing it overhead, layered on top of the walk cycle.
+	if held_limb_node != null and is_instance_valid(held_limb_node):
+		pivot.rotation_degrees.x = _update_club_pose(attack_timer, dt)
 
 	# Drive attack swing on right arm socket
 	if attack_timer > 0.0:
@@ -1195,6 +1476,16 @@ func update_visual_state(
 	else:
 		pivot.position.y = lerpf(pivot.position.y, 0.0, minf(1.0, 12.0 * dt))
 		pivot.rotation_degrees.z = lerpf(pivot.rotation_degrees.z, 0.0, minf(1.0, 12.0 * dt))
+
+	# Grafted limbs are stiff foreign parts: they swing from the joint like a puppet's.
+	for g_key: Variant in _graft_nodes.keys():
+		var g_node: Node3D = _graft_nodes[g_key] as Node3D
+		if g_node == null or not is_instance_valid(g_node):
+			continue
+		var g_phase: float = 0.0 if (g_key == &"arm_l" or g_key == &"leg_r") else PI
+		var g_amp: float = 0.75 if (g_key == &"leg_l" or g_key == &"leg_r") else 0.55
+		var g_target: float = sin(_walk_phase * 1.6 + g_phase) * g_amp if is_moving else 0.0
+		g_node.rotation.x = lerpf(g_node.rotation.x, g_target, minf(1.0, 18.0 * dt))
 
 	if rocket_flame != null:
 		if is_moving and not has_severed_legs and not has_severed_one_leg:
@@ -1246,6 +1537,9 @@ func update_visual_state(
 		else:
 			target_scale = Vector3.ONE # Spring settle
 		pivot.scale = pivot.scale.lerp(target_scale * base_s, minf(1.0, 18.0 * dt))
+	elif _bonk_squash_timer > 0.0:
+		_bonk_squash_timer = maxf(0.0, _bonk_squash_timer - dt)
+		pivot.scale = Vector3(0.88, 1.20, 0.88) * base_s
 	elif hurt_timer > 0.0:
 		pivot.scale = Vector3(1.18, 0.84, 1.18) * base_s
 	else:

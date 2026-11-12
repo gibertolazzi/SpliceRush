@@ -439,7 +439,7 @@ func _draw_animated_intro_tutorial(rect_size: Vector2) -> void:
 	var title: String = tr(&"HUD_STEAL_PARTS").replace("\n", " ") if is_phase_1 else tr(&"HUD_BECOME_ABOMINATION").replace("\n", " ")
 	draw_string(font_bold, card_rect.position + Vector2(12.0, 25.0), title, HORIZONTAL_ALIGNMENT_CENTER, card_w - 24.0, 19, gold)
 
-	var subtitle: String = tr(&"HUD_TUTORIAL_STEAL_SUB") if is_phase_1 else tr(&"HUD_TUTORIAL_ABOM_SUB")
+	var subtitle: String = tr(&"HUD_TUTORIAL_LIMBS_SUB") if is_phase_1 else tr(&"HUD_TUTORIAL_ABOM_SUB")
 	draw_string(font_regular, card_rect.position + Vector2(12.0, 42.0), subtitle, HORIZONTAL_ALIGNMENT_CENTER, card_w - 24.0, 12, muted)
 
 	var display_slot_order: Array[PartData.Slot] = [

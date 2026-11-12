@@ -69,10 +69,10 @@ extends Resource
 @export_group("Input & Camera")
 @export var joystick_deadzone: float = 0.16
 @export var joystick_max_radius_px: float = 68.0
-@export var camera_pitch_deg: float = -32.0
+@export var camera_pitch_deg: float = -50.0
 @export var camera_fov_deg: float = 52.0
-@export var camera_distance: float = 5.4
-@export var camera_z_bias: float = 3.6
+@export var camera_distance: float = 8.6
+@export var camera_z_bias: float = 5.8
 @export var camera_smooth_rate: float = 9.0
 @export var camera_rotation_enabled: bool = true
 @export var camera_rotation_smooth_rate: float = 5.0
