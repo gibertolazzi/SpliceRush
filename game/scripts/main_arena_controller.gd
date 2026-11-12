@@ -1171,28 +1171,40 @@ func _on_custom_play_pressed(slots: Dictionary, col: Color) -> void:
 		sound_controller.play_steal_stinger()
 
 func _on_hud_customize_requested() -> void:
-	server.reset_match()
+	server.bots_enabled = false
+	server.start_new_match(0.0, true)
 	is_customizing = true
+	_camera_transitioning = false
+	kill_cam_timer = 0.0
 	if customize_stage_root != null:
 		customize_stage_root.visible = true
 	if arena_builder != null:
 		arena_builder.visible = false
+	if target_ring_mesh != null:
+		target_ring_mesh.visible = false
 	if customization_menu != null:
 		customization_menu.visible = true
 		customization_menu.is_loading = false
+		customization_menu.queue_redraw()
 	if hud != null:
+		if hud.settings_modal != null and hud.settings_modal.is_open:
+			hud.settings_modal.close()
 		hud.visible = false
 		hud.show_result_overlay = false
+		hud.queue_redraw()
 	if virtual_joystick != null:
 		virtual_joystick.visible = false
-	server.bots_enabled = false
 	current_cam_yaw = 0.0
 	target_cam_yaw = 0.0
-	camera.position = Vector3(0.0, 1.45, 3.4)
-	camera.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
+	camera.fov = balance.camera_fov_deg
+	camera.position = Vector3(0.0, 1.25, 3.45)
+	camera.rotation_degrees = Vector3(-7.0, 0.0, 0.0)
 	if not fighter_nodes.is_empty():
+		fighter_nodes[0].visible = true
 		fighter_nodes[0].position = Vector3.ZERO
 		fighter_nodes[0].rotation = Vector3.ZERO
+		if customization_menu != null:
+			fighter_nodes[0].apply_slots(customization_menu.equipped_slots, false, true)
 	for i: int in range(1, fighter_nodes.size()):
 		fighter_nodes[i].visible = false
 

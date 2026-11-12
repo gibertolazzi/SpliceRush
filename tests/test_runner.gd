@@ -43,6 +43,7 @@ func _initialize() -> void:
 		"test_limb_mesh_library_cuts_real_limbs_from_models",
 		"test_fighter_shows_club_grafts_and_sockets",
 		"test_dropped_pieces_render_real_limb_meshes",
+		"test_return_to_customize_menu_after_match",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -1747,4 +1748,39 @@ func test_dropped_pieces_render_real_limb_meshes() -> bool:
 	ab.update_arena_vfx(1.0)
 	assert_eq(ab.comic_text_pool.size(), pool_before, "comic_text_returned_to_pool")
 	ab.free()
+	return true
+
+func test_return_to_customize_menu_after_match() -> bool:
+	var arena_ctrl := MainArenaController.new()
+	arena_ctrl._skip_customize = true
+	root.add_child(arena_ctrl)
+
+	assert_eq(arena_ctrl.is_customizing, false, "match_starts_active")
+	assert_eq(arena_ctrl.hud.visible, true, "hud_visible_in_match")
+	assert_eq(arena_ctrl.customization_menu.visible, false, "customize_menu_hidden_in_match")
+
+	# Simulate match end -> result overlay
+	arena_ctrl.server.match_elapsed_sec = arena_ctrl.balance.match_duration_sec - 0.02
+	arena_ctrl.server.step_simulation(0.05)
+	assert_eq(arena_ctrl.hud.show_result_overlay, true, "result_overlay_shown_after_match_end")
+
+	# Click "Personalizza" on result overlay
+	var cust_event := InputEventMouseButton.new()
+	cust_event.pressed = true
+	cust_event.button_index = MOUSE_BUTTON_LEFT
+	cust_event.position = arena_ctrl.hud._customize_btn_rect.get_center()
+	arena_ctrl.hud._input(cust_event)
+
+	assert_eq(arena_ctrl.is_customizing, true, "returned_to_customizing_state")
+	assert_eq(arena_ctrl.customization_menu.visible, true, "customization_menu_visible_after_click")
+	assert_eq(arena_ctrl.customize_stage_root.visible, true, "customize_pedestal_stage_visible")
+	assert_eq(arena_ctrl.arena_builder.visible, false, "arena_hidden_in_customize_menu")
+	assert_eq(arena_ctrl.hud.visible, false, "hud_hidden_in_customize_menu")
+	assert_eq(arena_ctrl.hud.show_result_overlay, false, "result_overlay_cleared")
+	assert_eq(arena_ctrl.virtual_joystick.visible, false, "joystick_hidden_in_customize_menu")
+	assert_eq(arena_ctrl.server.bots_enabled, false, "bots_disabled_in_customize_menu")
+	assert_eq(arena_ctrl.fighter_nodes[0].visible, true, "player_hero_visible_on_pedestal")
+	assert_eq(arena_ctrl.fighter_nodes[1].visible, false, "bot_hidden_in_customize_menu")
+
+	arena_ctrl.free()
 	return true
