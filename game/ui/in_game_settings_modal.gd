@@ -103,8 +103,8 @@ func _apply_sfx() -> void:
 	sfx_volume_changed.emit(sfx_volume)
 	queue_redraw()
 
-func _gui_input(event: InputEvent) -> void:
-	if not visible or not is_open:
+func _input(event: InputEvent) -> void:
+	if not is_visible_in_tree() or not is_open:
 		return
 
 	var pos := Vector2.ZERO
@@ -117,6 +117,8 @@ func _gui_input(event: InputEvent) -> void:
 			is_click = true
 	elif event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		if mb.device == InputEvent.DEVICE_ID_EMULATION:
+			return
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
 			pos = mb.position
 			is_click = true

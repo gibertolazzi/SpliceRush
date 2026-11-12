@@ -158,6 +158,40 @@ func test_virtual_joystick_and_rebind() -> bool:
 	root.add_child(vj)
 	var out_v: Vector2 = vj.simulate_drag(Vector2(100.0, 800.0), Vector2(100.0, 700.0))
 	assert_true(out_v.y < -0.9, "virtual_joystick_drag_up")
+
+	# Verify _unhandled_input handles native iOS/mobile touch + drag
+	var st_press := InputEventScreenTouch.new()
+	st_press.index = 0
+	st_press.pressed = true
+	st_press.position = Vector2(120.0, 820.0)
+	vj._unhandled_input(st_press)
+
+	var st_drag := InputEventScreenDrag.new()
+	st_drag.index = 0
+	st_drag.position = Vector2(120.0, 740.0)
+	vj._unhandled_input(st_drag)
+	assert_true(vj.current_vector.y < -0.8, "virtual_joystick_screen_touch_drag_moves")
+
+	var st_release := InputEventScreenTouch.new()
+	st_release.index = 0
+	st_release.pressed = false
+	st_release.position = Vector2(120.0, 740.0)
+	vj._unhandled_input(st_release)
+	assert_eq(vj.current_vector, Vector2.ZERO, "virtual_joystick_screen_touch_release_resets")
+
+	# Verify emulated mouse events from touch are ignored
+	var emu_mb := InputEventMouseButton.new()
+	emu_mb.device = InputEvent.DEVICE_ID_EMULATION
+	emu_mb.button_index = MOUSE_BUTTON_LEFT
+	emu_mb.pressed = true
+	emu_mb.position = Vector2(120.0, 820.0)
+	vj._unhandled_input(emu_mb)
+	assert_true(not vj._active, "virtual_joystick_ignores_emulated_mouse")
+
+	# Verify hidden joystick ignores input
+	vj.visible = false
+	vj._unhandled_input(st_press)
+	assert_true(not vj._active, "virtual_joystick_ignores_input_when_hidden")
 	vj.free()
 
 	var key_q := InputEventKey.new()

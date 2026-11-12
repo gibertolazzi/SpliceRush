@@ -26,7 +26,7 @@ var font_bold: Font = preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	mouse_filter = Control.MOUSE_FILTER_PASS
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func _process(delta: float) -> void:
 	var redraw: bool = false
@@ -69,7 +69,9 @@ func get_default_joystick_center() -> Vector2:
 			view_size = Vector2(540.0, 960.0)
 	return Vector2(115.0, view_size.y - 110.0)
 
-func _gui_input(event: InputEvent) -> void:
+func _unhandled_input(event: InputEvent) -> void:
+	if not is_visible_in_tree():
+		return
 	var view_size: Vector2 = get_viewport_rect().size
 	var att_c := get_attack_btn_center()
 	var dash_c := get_dash_btn_center()
@@ -108,6 +110,8 @@ func _gui_input(event: InputEvent) -> void:
 			_set_knob(sd.position)
 	elif event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event as InputEventMouseButton
+		if mb.device == InputEvent.DEVICE_ID_EMULATION:
+			return
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
 				if mb.position.distance_to(att_c) <= 52.0:
@@ -141,6 +145,8 @@ func _gui_input(event: InputEvent) -> void:
 			queue_redraw()
 	elif event is InputEventMouseMotion and _active and _touch_index == 0:
 		var mm: InputEventMouseMotion = event as InputEventMouseMotion
+		if mm.device == InputEvent.DEVICE_ID_EMULATION:
+			return
 		_set_knob(mm.position)
 
 func simulate_drag(base: Vector2, drag_to: Vector2) -> Vector2:
