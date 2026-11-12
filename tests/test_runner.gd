@@ -1423,6 +1423,15 @@ func test_hp_thresholds_pop_limbs_off_as_real_drops() -> bool:
 	assert_eq(arm_drop.owner_id, bot.id, "loose_arm_remembers_its_owner")
 	assert_true(bot.damage_mult < 0.8, "one_armed_bot_hits_softer")
 
+	# Act: healing back above the threshold and dropping below it again takes nothing more.
+	srv.dropped_parts.clear()
+	bot.pos = Vector2(1.2, 0.0)
+	bot.vel = Vector2.ZERO
+	bot.hp = 70
+	p.attack_cooldown = 0.0
+	srv.step_simulation(1.0 / 30.0)
+	assert_eq(srv.dropped_parts.size(), 0, "each_threshold_pops_a_limb_once_per_life")
+
 	# Act: second threshold (33%) takes a leg.
 	srv.dropped_parts.clear()
 	bot.pos = Vector2(1.2, 0.0)
@@ -1461,7 +1470,7 @@ func test_loose_limb_pickup_becomes_club_that_wears_out() -> bool:
 	assert_eq(p.slots[PartData.Slot.LEGS], &"base_boots", "own_legs_untouched")
 	assert_true(is_equal_approx(p.damage_mult, srv.balance.limb_club_leg_damage_mult), "leg_club_boosts_damage")
 	assert_true(is_equal_approx(p.range_mult, srv.balance.limb_club_leg_range_mult), "leg_club_boosts_reach")
-	assert_eq(p.stolen_parts_count, stolen_before + 1, "stolen_limb_counts_toward_abomination")
+	assert_eq(p.stolen_parts_count, stolen_before, "club_in_hand_is_not_a_stolen_body_piece")
 	assert_eq(srv.can_wield_limb(p), false, "cannot_stack_a_second_club")
 
 	# Act: swing until it breaks.
@@ -1497,6 +1506,7 @@ func test_loose_limb_reattaches_as_graft_when_limb_missing() -> bool:
 	p.slots[PartData.Slot.ARMS] = &"severed_one_arm"
 	srv._recalc_combatant_stats(p, false)
 	p.hp = 50
+	var stolen_at_start: int = p.stolen_parts_count
 	var body_changes: Array[int] = []
 	srv.combatant_body_changed.connect(func(id: int) -> void: body_changes.append(id))
 	var drop: MatchServer.DroppedPartState = srv.spawn_dropped_part(&"limb_arm", p.pos, Vector2.ZERO, false, 2)
@@ -1509,7 +1519,8 @@ func test_loose_limb_reattaches_as_graft_when_limb_missing() -> bool:
 	assert_eq(p.slots[PartData.Slot.ARMS], &"base_fist", "missing_arm_is_restored")
 	assert_eq(p.held_limb_slot, -1, "reattached_limb_is_not_a_club")
 	assert_eq(int(p.graft_owners.get(&"arm_l", -1)), 2, "graft_remembers_foreign_owner")
-	assert_true(p.hp > 50, "reattaching_heals")
+	assert_true(p.hp > 50, "stolen_graft_heals")
+	assert_eq(p.stolen_parts_count, stolen_at_start + 1, "graft_counts_as_a_stolen_piece")
 	assert_true(is_equal_approx(p.damage_mult, 1.0), "arm_debuff_removed")
 	assert_true(body_changes.has(0), "body_changed_signal_for_visuals")
 
@@ -1520,6 +1531,8 @@ func test_loose_limb_reattaches_as_graft_when_limb_missing() -> bool:
 	# Assert: the graft falls off still belonging to fighter 2.
 	assert_eq(srv.dropped_parts[0].owner_id, 2, "severed_graft_keeps_original_owner")
 	assert_eq(p.graft_owners.has(&"arm_l"), false, "graft_record_cleared")
+	assert_eq(p.stolen_parts_count, stolen_at_start, "losing_the_graft_gives_the_piece_back")
+	assert_eq(srv.wants_limb_drop(p, srv.dropped_parts[0]), false, "cannot_grab_a_freshly_lost_limb_right_back")
 
 	# Act: picking your own limb back up is not a theft.
 	var own: MatchServer.DroppedPartState = srv.spawn_dropped_part(&"limb_arm", p.pos, Vector2.ZERO, false, 0)

@@ -49,17 +49,19 @@ extends Resource
 @export_group("Limbs & Clubs")
 ## HP ratios at which a hit pops a limb off the victim (one limb per threshold crossed).
 @export var limb_break_hp_ratios: PackedFloat32Array = PackedFloat32Array([0.66, 0.33])
-@export var limb_club_arm_damage_mult: float = 1.45
+@export var limb_club_arm_damage_mult: float = 1.2
 @export var limb_club_arm_range_mult: float = 1.30
 @export var limb_club_arm_knockback_mult: float = 2.2
 @export var limb_club_arm_hits: int = 6
-@export var limb_club_leg_damage_mult: float = 1.75
+@export var limb_club_leg_damage_mult: float = 1.4
 @export var limb_club_leg_range_mult: float = 1.45
 @export var limb_club_leg_knockback_mult: float = 2.8
 @export var limb_club_leg_cooldown_mult: float = 1.12
 @export var limb_club_leg_hits: int = 5
 ## Chance that a club hit knocks an extra limb off the target.
-@export var limb_club_sever_chance: float = 0.35
+@export var limb_club_sever_chance: float = 0.15
+## Seconds before a fighter can pick its own freshly lost limb back up.
+@export var limb_owner_pickup_lock_sec: float = 2.5
 @export var limb_drop_lifetime_sec: float = 14.0
 @export var max_limb_drops: int = 16
 ## Limbs that burst out of a fighter on KO (on top of special parts).

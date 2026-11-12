@@ -94,7 +94,7 @@ func _init_materials() -> void:
 	_stone_mat_a.roughness = 0.84
 
 	_stone_mat_b = StandardMaterial3D.new()
-	_stone_mat_b.albedo_color = Color(0.50, 0.36, 0.41) # Dusky rose stone slabs
+	_stone_mat_b.albedo_color = Color(0.53, 0.38, 0.41) # Dusky rose stone slabs
 	_stone_mat_b.roughness = 0.88
 
 	_stone_rim_mat = StandardMaterial3D.new()
@@ -172,7 +172,7 @@ func apply_theme_materials(theme: MatchServer.MapTheme) -> void:
 			_debris_mat.albedo_color = Color(0.80, 0.86, 0.96)
 		_:
 			_stone_mat_a.albedo_color = Color(0.60, 0.44, 0.44)
-			_stone_mat_b.albedo_color = Color(0.50, 0.36, 0.41)
+			_stone_mat_b.albedo_color = Color(0.53, 0.38, 0.41)
 			_stone_dark_mat.albedo_color = Color(0.26, 0.20, 0.42)
 			_stone_rim_mat.albedo_color = Color(0.72, 0.58, 0.56)
 			_debris_mat.albedo_color = Color(0.88, 0.72, 0.62)
@@ -309,8 +309,8 @@ func spawn_dropped_part_visual(drop_id: int, part_id: StringName, slot: int, rar
 		PartData.Rarity.COMMON:
 			var ring := MeshInstance3D.new()
 			var torus := TorusMesh.new()
-			torus.inner_radius = 0.56
-			torus.outer_radius = 0.64
+			torus.inner_radius = 0.50
+			torus.outer_radius = 0.55
 			torus.rings = 20
 			torus.ring_segments = 4
 			ring.mesh = torus
@@ -510,7 +510,8 @@ func _build_floor_multimesh(server: MatchServer, tile: float) -> void:
 		var yaw: float = float(hash_v % 4) * (PI * 0.5)
 		var basis := Basis.from_euler(Vector3(0.0, yaw, 0.0))
 		var xform := Transform3D(basis, Vector3(wxz.x, y_off, wxz.y))
-		if ((cell.x + cell.y) & 1) == 0:
+		# Two close stone tones scattered by hash: reads as worn slabs, not a chessboard.
+		if (hash_v % 7) < 4:
 			cells_a_coords.append(cell)
 			cells_a.append(xform)
 		else:
@@ -957,6 +958,7 @@ func spawn_statusfx_impact(world_xz: Vector2, is_crit_or_ko: bool = false, impac
 		if tree != null:
 			var vfx: Node3D = STATUS_SHATTER_VFX.instantiate() as Node3D
 			vfx.position = Vector3(world_xz.x, 1.20, world_xz.y)
+			vfx.scale = Vector3.ONE * 0.55 # Keep the KO burst from covering the screen
 			add_child(vfx)
 			var ap: AnimationPlayer = vfx.find_child("AnimationPlayer", true, false) as AnimationPlayer
 			if ap != null and ap.has_animation("open"):

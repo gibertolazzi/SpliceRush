@@ -77,6 +77,8 @@ var _transform_flash_timer: float = 0.0
 
 # --- Dismemberment visuals: stump sockets, grafted limbs and the limb held as a club ---
 const LIMB_KEYS: Array[StringName] = [&"arm_l", &"arm_r", &"leg_l", &"leg_r"]
+const SHATTER_VFX_SCALE: float = 0.42
+const MIXAMO_OVERLAY_OFFSET: float = 0.00012
 const CLUB_SWING_SEC: float = 0.30
 const CLUB_HOLD_DIR := Vector3(-0.38, 0.86, 0.34)
 const CLUB_WINDUP_DIR := Vector3(-0.25, 0.92, -0.55)
@@ -99,6 +101,7 @@ var _club_dir := CLUB_HOLD_DIR
 var _club_side: float = 1.0
 var _bonk_squash_timer: float = 0.0
 var _collapsed_bones: Dictionary = {} # bone index -> collapsed pose scale
+var _overlay_meshes: Array[MeshInstance3D] = []
 
 static var _shared_outline_mat: ShaderMaterial
 static var _shared_dark_mat: ShaderMaterial
@@ -114,6 +117,9 @@ static var _shared_mixamo_outline_mat: ShaderMaterial
 func _exit_tree() -> void:
 	if char_mesh != null:
 		char_mesh.material_overlay = null
+	for o_mesh: MeshInstance3D in _overlay_meshes:
+		if is_instance_valid(o_mesh):
+			o_mesh.material_overlay = null
 
 func _is_mixamo_collection_model() -> bool:
 	return character_model_type in [
@@ -294,6 +300,8 @@ func play_shatter_vfx(local_pos: Vector3) -> void:
 		return
 	var vfx: Node3D = STATUS_SHATTER_VFX.instantiate() as Node3D
 	vfx.position = local_pos
+	# The StatusFX burst is authored for a much larger scene; at full size it hides the fight.
+	vfx.scale = Vector3.ONE * SHATTER_VFX_SCALE
 	pivot.add_child(vfx)
 	var ap: AnimationPlayer = vfx.find_child("AnimationPlayer", true, false) as AnimationPlayer
 	if ap != null and ap.has_animation("open"):
@@ -524,6 +532,7 @@ func _build_base_skeleton() -> void:
 	pivot.name = "Pivot"
 	add_child(pivot)
 	limb_extra_roots.clear()
+	_overlay_meshes.clear()
 	_collapsed_bones.clear()
 	_graft_nodes.clear()
 	_grafts.clear()
@@ -569,6 +578,22 @@ func _build_base_skeleton() -> void:
 	transform_burst_ring.material_override = _shared_gold_mat if fighter_id == 0 else _shared_white_mat
 	transform_burst_ring.visible = false
 	add_child(transform_burst_ring)
+
+	# Thin white ground ring under the player's own fighter (key art): finds you in the brawl at a glance.
+	player_cursor_ring = null
+	if fighter_id == 0:
+		var cursor_mi := MeshInstance3D.new()
+		cursor_mi.name = "PlayerGroundRing"
+		var cursor_torus := TorusMesh.new()
+		cursor_torus.inner_radius = 0.92
+		cursor_torus.outer_radius = 0.98
+		cursor_torus.rings = 28
+		cursor_torus.ring_segments = 4
+		cursor_mi.mesh = cursor_torus
+		cursor_mi.position = Vector3(0.0, 0.05, 0.0)
+		cursor_mi.material_override = _shared_white_mat
+		add_child(cursor_mi)
+		player_cursor_ring = cursor_mi
 
 	var base_s: float = _get_target_base_scale()
 	pivot.scale = Vector3.ONE * base_s
@@ -670,10 +695,17 @@ func _build_base_skeleton() -> void:
 							toon_m.next_pass = _shared_mixamo_outline_mat
 							mi.set_surface_override_material(s_i, toon_m)
 
-		if STATUS_OVERLAY_RES != null and char_mesh != null:
+		if STATUS_OVERLAY_RES != null and char_mesh != null and skeleton != null:
 			status_overlay_mat = STATUS_OVERLAY_RES.duplicate() as ShaderMaterial
 			status_overlay_mat.set_shader_parameter("effect_amount", 0.0)
-			char_mesh.material_overlay = status_overlay_mat
+			# The overlay pushes vertices out along the normal in mesh units. These rigs are
+			# authored 100x smaller than the scene, so the stock offset ballooned the hit flash
+			# into a screen-filling blob. Rescale it and flash the whole body, not one sub-mesh.
+			status_overlay_mat.set_shader_parameter("offset", MIXAMO_OVERLAY_OFFSET)
+			for o_child: Node in skeleton.get_children():
+				if o_child is MeshInstance3D:
+					(o_child as MeshInstance3D).material_overlay = status_overlay_mat
+					_overlay_meshes.append(o_child as MeshInstance3D)
 	elif char_mesh != null and char_mesh.mesh != null and char_mesh.mesh.get_surface_count() > 0:
 		if is_guy:
 			var guy_skin_mat := ShaderMaterial.new()
@@ -1245,7 +1277,6 @@ func _populate_arm_sockets(part_id: StringName) -> void:
 			_set_bone_scale(_bone_right_forearm, Vector3.ONE)
 			_set_bone_scale(_bone_right_hand, Vector3.ONE)
 
-			play_shatter_vfx((limb_extra_roots[&"arm_l"] as Node3D).position if limb_extra_roots.has(&"arm_l") else left_arm_socket.position)
 
 		&"severed_arms":
 			# Hide skinned hero arms
@@ -1257,7 +1288,6 @@ func _populate_arm_sockets(part_id: StringName) -> void:
 			_set_bone_scale(_bone_right_hand, Vector3(0.001, 0.001, 0.001))
 
 			# The empty toy sockets are drawn by _refresh_limb_extras on the real shoulder joints.
-			play_shatter_vfx((limb_extra_roots[&"arm_r"] as Node3D).position if limb_extra_roots.has(&"arm_r") else right_arm_socket.position)
 
 		&"chainsaw_arm":
 			# Left Arm: show natural muscular arm from 3D model with spiked wristband
@@ -1326,7 +1356,6 @@ func _populate_leg_sockets(part_id: StringName) -> void:
 			_set_bone_scale(_bone_left_leg, Vector3.ONE)
 			_set_bone_scale(_bone_left_foot, Vector3.ONE)
 
-			play_shatter_vfx((limb_extra_roots[&"leg_r"] as Node3D).position if limb_extra_roots.has(&"leg_r") else right_leg_socket.position)
 
 		&"severed_legs":
 			# Hide skinned hero legs
@@ -1337,7 +1366,6 @@ func _populate_leg_sockets(part_id: StringName) -> void:
 			_set_bone_scale(_bone_left_foot, Vector3(0.001, 0.001, 0.001))
 			_set_bone_scale(_bone_right_foot, Vector3(0.001, 0.001, 0.001))
 
-			play_shatter_vfx((limb_extra_roots[&"leg_l"] as Node3D).position if limb_extra_roots.has(&"leg_l") else left_leg_socket.position)
 
 		&"spring_legs":
 			_set_bone_scale(_bone_left_upleg, Vector3.ONE)

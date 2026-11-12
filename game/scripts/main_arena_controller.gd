@@ -65,6 +65,7 @@ var _preview_face_south: bool = false
 var _preview_settings: bool = false
 var _preview_9parts: bool = false
 var _preview_limbs: bool = false
+var _preview_brawl: bool = false
 var _camera_transitioning: bool = false
 
 func _ready() -> void:
@@ -155,6 +156,10 @@ func _ready() -> void:
 			hud.on_player_slots_updated(p0.slots, p0.is_abomination, p0.total_mass)
 	if _preview_limbs:
 		_stage_limb_preview()
+		if _preview_brawl:
+			server.bots_enabled = true
+			for c: MatchServer.CombatantState in server.combatants:
+				c.attack_cooldown = 0.4
 	if _preview_face_east and not server.combatants.is_empty():
 		var p0: MatchServer.CombatantState = server.combatants[0]
 		p0.pos = Vector2(-1.5, 2.0)
@@ -240,6 +245,11 @@ func _parse_cmdline_args() -> void:
 			_skip_customize = true
 		elif arg == "--preview-limbs":
 			_preview_limbs = true
+			_skip_customize = true
+		elif arg == "--preview-brawl":
+			# Same staging as --preview-limbs, then the bots are let loose around the player.
+			_preview_limbs = true
+			_preview_brawl = true
 			_skip_customize = true
 		elif arg == "--preview-loading":
 			_preview_loading = true
@@ -450,6 +460,11 @@ func _setup_server_and_world() -> void:
 		fn.update_visual_state(c.pos, c.vel, c.facing_angle, 0.0, 0.0, c.alive, 0.016)
 		fighter_nodes.append(fn)
 
+	# Cut the limb meshes for every model in the match now, at load, so the first limb that
+	# pops off mid-fight does not cost a frame hitch.
+	for fn_warm: BlockyFighter3D in fighter_nodes:
+		LimbMeshLibrary.get_limb_set(fn_warm.get_model_scene())
+
 	for i: int in range(8):
 		var fx := MeshInstance3D.new()
 		var bm := BoxMesh.new()
@@ -543,17 +558,29 @@ func _apply_body_state(combatant_id: int) -> void:
 func _on_server_combatant_body_changed(combatant_id: int) -> void:
 	_apply_body_state(combatant_id)
 
+const COMIC_FEEDBACK_RADIUS: float = 11.0
+
+## Twelve fighters pop limbs all over the arena: only what happens around the player gets
+## text and sound, so the screen and the mix stay readable.
+func _is_near_player(pos_xz: Vector2) -> bool:
+	if server == null or server.combatants.is_empty():
+		return false
+	return server.combatants[0].pos.distance_to(pos_xz) <= COMIC_FEEDBACK_RADIUS
+
 func _pick_comic(keys: Array[StringName]) -> String:
 	return tr(keys[randi() % keys.size()])
 
 func _on_server_limb_severed(victim_id: int, attacker_id: int, _slot: int, pos_xz: Vector2) -> void:
+	var involves_player: bool = attacker_id == 0 or victim_id == 0
+	if not involves_player and not _is_near_player(pos_xz):
+		return
 	if arena_builder != null:
 		arena_builder.spawn_impact_sparks(pos_xz, 6)
 		arena_builder.spawn_dust_puff(Vector3(pos_xz.x, 0.9, pos_xz.y), 2, 0.3)
 		arena_builder.spawn_comic_text(Vector3(pos_xz.x, 2.6, pos_xz.y), _pick_comic([&"COMIC_LIMB_POP_1", &"COMIC_LIMB_POP_2", &"COMIC_LIMB_POP_3"]), Color(1.0, 0.95, 0.45), 0.9)
 	if sound_controller != null:
 		sound_controller.play_limb_pop_sfx()
-	if attacker_id == 0 or victim_id == 0:
+	if involves_player:
 		camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.35)
 		if attacker_id == 0:
 			trigger_hit_stop(0.06, 0.10)
@@ -562,6 +589,8 @@ func _on_server_limb_bonk(attacker_id: int, target_id: int, limb_slot: int, pos_
 	if attacker_id >= 0 and attacker_id < fighter_nodes.size():
 		fighter_nodes[attacker_id].trigger_bonk_squash()
 	var is_ko: bool = target_id >= 0 and target_id < server.combatants.size() and not server.combatants[target_id].alive
+	if attacker_id != 0 and target_id != 0 and not _is_near_player(pos_xz):
+		return
 	if arena_builder != null:
 		arena_builder.spawn_impact_star(pos_xz, true)
 		var txt: String = tr(&"COMIC_KO") if is_ko else _pick_comic([&"COMIC_BONK_1", &"COMIC_BONK_2", &"COMIC_BONK_3", &"COMIC_BONK_4"])
@@ -929,7 +958,8 @@ func _on_server_part_picked_up(drop_id: int, collector_id: int, part_id: StringN
 			var comic_key: StringName = &"COMIC_REATTACH"
 			if cs.held_limb_slot == slot:
 				comic_key = &"COMIC_WIELD_LEG" if slot == int(PartData.Slot.LEGS) else &"COMIC_WIELD_ARM"
-			arena_builder.spawn_comic_text(Vector3(cs.pos.x, 3.1, cs.pos.y), tr(comic_key), Color(0.55, 1.0, 0.70), 1.1 if collector_id == 0 else 0.8)
+			if collector_id == 0 or _is_near_player(cs.pos):
+				arena_builder.spawn_comic_text(Vector3(cs.pos.x, 3.1, cs.pos.y), tr(comic_key), Color(0.55, 1.0, 0.70), 1.1 if collector_id == 0 else 0.8)
 
 		if collector_id == 0:
 			camera_shake_trauma = minf(1.0, camera_shake_trauma + 0.65)
