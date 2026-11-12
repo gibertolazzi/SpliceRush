@@ -46,13 +46,18 @@ var font_bold: Font = preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
 var font_regular: Font = preload("res://game/ui/fonts/LondrinaSolid-Regular.ttf")
 var logo_texture: Texture2D = preload("res://game/ui/assets/logo.svg")
 
+const TIMER_SVG: Texture2D = preload("res://game/ui/assets/timer.svg")
+const SKULL_SVG: Texture2D = preload("res://game/ui/assets/skull.svg")
+const HAMBURGER_SVG: Texture2D = preload("res://game/ui/assets/hamburger.svg")
 const ARM_SVG: Texture2D = preload("res://game/ui/assets/arm.svg")
 const LEG_SVG: Texture2D = preload("res://game/ui/assets/leg.svg")
 const CORE_SVG: Texture2D = preload("res://game/ui/assets/components.svg")
 
+var _hamburger_btn_rect := Rect2(Vector2(540.0 - 24.0 - 54.0, 18.0), Vector2(54.0, 46.0))
+
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mouse_filter = Control.MOUSE_FILTER_PASS
 	_apply_safe_area()
 
 func _process(delta: float) -> void:
@@ -89,6 +94,16 @@ func _process(delta: float) -> void:
 
 func _input(event: InputEvent) -> void:
 	if not show_result_overlay:
+		if event is InputEventScreenTouch:
+			var st := event as InputEventScreenTouch
+			if st.pressed and _hamburger_btn_rect.has_point(st.position):
+				customize_requested.emit()
+				get_viewport().set_input_as_handled()
+		elif event is InputEventMouseButton:
+			var mb := event as InputEventMouseButton
+			if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and _hamburger_btn_rect.has_point(mb.position):
+				customize_requested.emit()
+				get_viewport().set_input_as_handled()
 		return
 	if event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
@@ -269,15 +284,12 @@ func _draw() -> void:
 			var l_col: Color = Color(1.0, 0.94, 0.48, line_alpha) if (l_i % 2 == 0) else Color(1.0, 0.22, 0.62, line_alpha)
 			draw_line(p_in, p_out, l_col, 3.6)
 
-	# 1. TOP-LEFT & TOP-RIGHT: Modern Capsule Pills (Timer on Left, Kills on Right, matching reference art)
-	_draw_top_bar_capsules(rect_size)
+	# 1. TOP BARS (Row 1 & Row 2 matching exact reference mockup)
+	_draw_mockup_top_bar(rect_size)
 
-	# 2. BOTTOM-CENTER: 4-Slot Equipment Dock Cards (Fist, Boot, Helmet, Chainsaw, matching reference art)
-	_draw_bottom_equipment_dock(rect_size)
-
-	# Frenzy Phase Banner or Part-Stolen Toast below timer
+	# Frenzy Phase Banner or Part-Stolen Toast below Row 2
 	if is_frenzy and not show_result_overlay:
-		var f_rect := Rect2(Vector2(rect_size.x * 0.5 - 130.0, 62.0), Vector2(260.0, 36.0))
+		var f_rect := Rect2(Vector2(rect_size.x * 0.5 - 130.0, 134.0), Vector2(260.0, 36.0))
 		_draw_chamfer_panel(f_rect, Color(0.24, 0.04, 0.16, 0.95), magenta, 6.0)
 		draw_string(font_bold, f_rect.position + Vector2(10.0, 18.0), tr(&"HUD_FRENZY_BANNER"), HORIZONTAL_ALIGNMENT_CENTER, 240.0, 13, gold)
 
@@ -298,7 +310,7 @@ func _draw() -> void:
 			else:
 				draw_rect(pip_r, Color(0.5, 0.20, 0.28, 0.8), false, 1.5)
 	elif _toast_timer > 0.0 and _toast_text != "" and _stolen_banner_timer <= 0.0:
-		var toast_rect := Rect2(Vector2(rect_size.x - 196.0, 82.0), Vector2(184.0, 28.0))
+		var toast_rect := Rect2(Vector2(rect_size.x - 196.0, 134.0), Vector2(184.0, 28.0))
 		_draw_chamfer_panel(toast_rect, Color(0.10, 0.06, 0.24, 0.96), gold, 5.0)
 		draw_string(font_bold, toast_rect.position + Vector2(8.0, 20.0), _toast_text, HORIZONTAL_ALIGNMENT_CENTER, 168.0, 15, gold)
 
@@ -368,7 +380,7 @@ func _draw_animated_intro_tutorial(rect_size: Vector2) -> void:
 	var is_phase_1: bool = (intro_tutorial_timer > 3.0)
 	var card_w: float = minf(rect_size.x - 28.0, 480.0)
 	var card_h: float = 96.0
-	var card_rect := Rect2(Vector2((rect_size.x - card_w) * 0.5, 86.0), Vector2(card_w, card_h))
+	var card_rect := Rect2(Vector2((rect_size.x - card_w) * 0.5, 134.0), Vector2(card_w, card_h))
 
 	var gold := Color(1.0, 0.76, 0.12, alpha)
 	var muted := Color(0.86, 0.84, 0.96, alpha * 0.92)
@@ -571,6 +583,139 @@ func _draw_slot_mini_icon(slot_idx: int, c: Vector2, col: Color) -> void:
 		3: # Core / Gear (CORE)
 			draw_circle(c, 6.5, col)
 			draw_circle(c, 2.8, Color(0.08, 0.08, 0.20))
+
+func _draw_mockup_top_bar(rect_size: Vector2) -> void:
+	var total_sec: int = maxi(0, int(ceil(time_remaining_sec)))
+	var is_last_10s: bool = (total_sec <= 10 and not show_result_overlay)
+	var pulse_scale: float = (1.0 + 0.08 * sin(float(Time.get_ticks_msec()) * 0.015)) if is_last_10s else 1.0
+
+	var navy_bg := Color(0.08, 0.08, 0.22, 0.94)
+	var pill_border := Color(0.24, 0.24, 0.46, 0.50)
+	var white := Color.WHITE
+	var radius: float = 14.0
+
+	# ----------------- ROW 1: TOP BAR (Y = 18.0, H = 46.0) -----------------
+	# 1. Timer Pill [timer.svg] 00:47
+	var timer_w: float = 142.0 * pulse_scale
+	var timer_h: float = 46.0 * pulse_scale
+	var timer_rect := Rect2(Vector2(24.0, 18.0), Vector2(timer_w, timer_h))
+	var t_border: Color = Color(1.0, 0.25, 0.35) if is_last_10s else (Color(1.0, 0.18, 0.58) if is_frenzy else pill_border)
+	_draw_rounded_rect(timer_rect, navy_bg, radius * pulse_scale, true)
+	_draw_rounded_rect(timer_rect, t_border, radius * pulse_scale, false, 1.4)
+
+	var icon_timer_sz := Vector2(22.0, 26.0) * pulse_scale
+	var icon_timer_pos := timer_rect.position + Vector2(12.0 * pulse_scale, (timer_h - icon_timer_sz.y) * 0.5)
+	if TIMER_SVG != null:
+		draw_texture_rect(TIMER_SVG, Rect2(icon_timer_pos, icon_timer_sz), false, white)
+	else:
+		_draw_stopwatch_icon(timer_rect.position + Vector2(22.0, timer_h * 0.5), 11.0, white)
+
+	var mins: int = total_sec / 60
+	var secs: int = total_sec % 60
+	var timer_str: String = "%02d:%02d" % [mins, secs]
+	var timer_col: Color = Color(1.0, 0.30, 0.40) if is_last_10s else white
+	var timer_fsize: int = int(round(26.0 * pulse_scale))
+	draw_string(font_bold, timer_rect.position + Vector2(44.0 * pulse_scale, timer_h * 0.5 + 9.0 * pulse_scale), timer_str, HORIZONTAL_ALIGNMENT_LEFT, -1, timer_fsize, timer_col)
+
+	# 2. Skull Pill [skull.svg] 5
+	var skull_w: float = 84.0
+	var skull_h: float = 46.0
+	var skull_rect := Rect2(Vector2(176.0, 18.0), Vector2(skull_w, skull_h))
+	_draw_rounded_rect(skull_rect, navy_bg, radius, true)
+	_draw_rounded_rect(skull_rect, pill_border, radius, false, 1.4)
+
+	var icon_skull_sz := Vector2(24.0, 24.0)
+	var icon_skull_pos := skull_rect.position + Vector2(10.0, (skull_h - icon_skull_sz.y) * 0.5)
+	if SKULL_SVG != null:
+		draw_texture_rect(SKULL_SVG, Rect2(icon_skull_pos, icon_skull_sz), false, white)
+	else:
+		_draw_skull_icon(skull_rect.position + Vector2(22.0, skull_h * 0.5), 11.0, white)
+
+	var kills_str: String = str(stolen_parts_count)
+	draw_string(font_bold, skull_rect.position + Vector2(36.0, skull_h * 0.5 + 9.0), kills_str, HORIZONTAL_ALIGNMENT_CENTER, 42.0, 26, white)
+
+	# 3. Hamburger Button [hamburger.svg] (Top-right)
+	var ham_w: float = 54.0
+	var ham_h: float = 46.0
+	_hamburger_btn_rect = Rect2(Vector2(rect_size.x - 24.0 - ham_w, 18.0), Vector2(ham_w, ham_h))
+	_draw_rounded_rect(_hamburger_btn_rect, navy_bg, radius, true)
+	_draw_rounded_rect(_hamburger_btn_rect, pill_border, radius, false, 1.4)
+
+	var icon_ham_sz := Vector2(24.0, 21.0)
+	var icon_ham_pos := _hamburger_btn_rect.position + (_hamburger_btn_rect.size - icon_ham_sz) * 0.5
+	if HAMBURGER_SVG != null:
+		draw_texture_rect(HAMBURGER_SVG, Rect2(icon_ham_pos, icon_ham_sz), false, white)
+	else:
+		var c_x: float = _hamburger_btn_rect.position.x + 14.0
+		var c_w: float = _hamburger_btn_rect.size.x - 28.0
+		for bar_i in range(3):
+			var bar_y: float = _hamburger_btn_rect.position.y + 15.0 + float(bar_i) * 8.0
+			draw_line(Vector2(c_x, bar_y), Vector2(c_x + c_w, bar_y), white, 3.0)
+
+	# ----------------- ROW 2: PARTS & SLOTS (Y = 74.0, H = 48.0) -----------------
+	# 1. Stolen Parts Progress Pill: [ 2/9 ]
+	var prog_rect := Rect2(Vector2(24.0, 74.0), Vector2(78.0, 48.0))
+	_draw_rounded_rect(prog_rect, navy_bg, radius, true)
+	_draw_rounded_rect(prog_rect, pill_border, radius, false, 1.4)
+	var prog_str: String = "%d/9" % [stolen_parts_count]
+	draw_string(font_bold, prog_rect.position + Vector2(0.0, 33.0), prog_str, HORIZONTAL_ALIGNMENT_CENTER, 78.0, 24, white)
+
+	# 2. Slot Boxes: Arm (Fist), Leg (Boot), Components (Wrench)
+	var slot_defs: Array[Dictionary] = [
+		{
+			"rect": Rect2(Vector2(112.0, 74.0), Vector2(48.0, 48.0)),
+			"slot_enum": PartData.Slot.ARMS,
+			"slot_idx": 1,
+			"tex": ARM_SVG,
+			"tex_sz": Vector2(22.0, 31.0)
+		},
+		{
+			"rect": Rect2(Vector2(170.0, 74.0), Vector2(48.0, 48.0)),
+			"slot_enum": PartData.Slot.LEGS,
+			"slot_idx": 2,
+			"tex": LEG_SVG,
+			"tex_sz": Vector2(20.0, 32.0)
+		},
+		{
+			"rect": Rect2(Vector2(228.0, 74.0), Vector2(48.0, 48.0)),
+			"slot_enum": PartData.Slot.CORE,
+			"slot_idx": 3,
+			"tex": CORE_SVG,
+			"tex_sz": Vector2(16.0, 34.0)
+		},
+	]
+
+	for item: Dictionary in slot_defs:
+		var b_rect: Rect2 = item["rect"]
+		var s_enum: PartData.Slot = item["slot_enum"]
+		var s_idx: int = item["slot_idx"]
+		var tex: Texture2D = item["tex"]
+		var tex_sz: Vector2 = item["tex_sz"]
+
+		var pid: StringName = equipped_slots.get(s_enum, PartCatalog.get_base_part_for_slot(s_enum)) as StringName
+		var is_upgraded: bool = (pid != PartCatalog.get_base_part_for_slot(s_enum))
+		var pdata: PartData = PartCatalog.get_part(pid)
+		var r_col: Color = PartCatalog.get_rarity_color(pdata.rarity)
+
+		_draw_rounded_rect(b_rect, navy_bg, radius, true)
+
+		var b_border: Color = r_col if is_upgraded else pill_border
+		var b_w: float = 2.0 if is_upgraded else 1.4
+		_draw_rounded_rect(b_rect, b_border, radius, false, b_w)
+
+		# Slot flash pulse when part stolen
+		if s_idx < _slot_flash_timers.size() and _slot_flash_timers[s_idx] > 0.0:
+			var f_timer: float = _slot_flash_timers[s_idx]
+			var p_alpha: float = clampf(f_timer / 1.6, 0.0, 1.0)
+			var pulse: float = 0.5 + 0.5 * sin(f_timer * 16.0)
+			_draw_rounded_rect(b_rect, Color(1.0, 0.85, 0.20, 0.95 * p_alpha), radius, false, 2.8)
+			_draw_rounded_rect(b_rect, Color(1.0, 0.85, 0.20, 0.30 * pulse * p_alpha), radius, true)
+
+		if tex != null:
+			var tex_pos := b_rect.position + (b_rect.size - tex_sz) * 0.5
+			draw_texture_rect(tex, Rect2(tex_pos, tex_sz), false, white)
+		else:
+			_draw_slot_mini_icon(s_idx, b_rect.get_center(), r_col)
 
 func _draw_top_bar_capsules(rect_size: Vector2) -> void:
 	var total_sec: int = maxi(0, int(ceil(time_remaining_sec)))

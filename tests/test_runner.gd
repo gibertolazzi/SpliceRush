@@ -1041,6 +1041,41 @@ func test_reference_mockup_vertical_hud() -> bool:
 	# Verify redraw request queued cleanly
 	hud.queue_redraw()
 
+	# Verify SVG textures preloaded cleanly
+	assert_true(hud.TIMER_SVG != null, "hud_timer_svg_loaded")
+	assert_true(hud.SKULL_SVG != null, "hud_skull_svg_loaded")
+	assert_true(hud.HAMBURGER_SVG != null, "hud_hamburger_svg_loaded")
+	assert_true(hud.ARM_SVG != null, "hud_arm_svg_loaded")
+	assert_true(hud.LEG_SVG != null, "hud_leg_svg_loaded")
+	assert_true(hud.CORE_SVG != null, "hud_core_svg_loaded")
+
+	# Verify Hamburger button interaction emits customize_requested
+	var customize_emitted := [false]
+	var on_cust := func() -> void:
+		customize_emitted[0] = true
+	hud.customize_requested.connect(on_cust)
+	var ham_event := InputEventMouseButton.new()
+	ham_event.pressed = true
+	ham_event.button_index = MOUSE_BUTTON_LEFT
+	ham_event.position = hud._hamburger_btn_rect.get_center()
+	hud._input(ham_event)
+	assert_true(customize_emitted[0], "hud_hamburger_button_emits_customize_requested")
+
+	# Verify TouchJoystick button layout matches reference mockup
+	var joy := TouchJoystick.new()
+	root.add_child(joy)
+	joy.size = Vector2(540.0, 960.0)
+	var att_c: Vector2 = joy.get_attack_btn_center()
+	var dash_c: Vector2 = joy.get_dash_btn_center()
+	var rest_c: Vector2 = joy.get_default_joystick_center()
+	assert_true(is_equal_approx(att_c.x, 540.0 - 76.0), "attack_btn_center_x")
+	assert_true(is_equal_approx(att_c.y, 960.0 - 195.0), "attack_btn_center_y")
+	assert_true(is_equal_approx(dash_c.x, 540.0 - 76.0), "dash_btn_center_x")
+	assert_true(is_equal_approx(dash_c.y, 960.0 - 85.0), "dash_btn_center_y")
+	assert_true(is_equal_approx(rest_c.x, 115.0), "joystick_rest_center_x")
+	assert_true(is_equal_approx(rest_c.y, 960.0 - 110.0), "joystick_rest_center_y")
+	joy.free()
+
 	hud.free()
 	return true
 
