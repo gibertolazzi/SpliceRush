@@ -36,3 +36,6 @@ camera_fov_deg = 52.0
 camera_distance = 5.4
 camera_z_bias = 3.6
 camera_smooth_rate = 9.0
+camera_rotation_enabled = true
+camera_rotation_smooth_rate = 5.0
+camera_look_ahead_dist = 1.4

@@ -37,7 +37,7 @@ float sample_value(vec2 uv){
 	vec2 noise_uv = vec2(uv.x - uv.y * noise_twist, uv.y) * noise_scale + (TIME * noise_scroll);
 	float noise = texture(noise_texture, noise_uv).r;
 	
-	float mask = pow((1.0 - abs(uv.y * 2.0 - 1.0) - 0.5) / 0.5, 0.2); 
+	float mask = pow(clamp((1.0 - abs(uv.y * 2.0 - 1.0) - 0.5) / 0.5, 0.0, 1.0), 0.2); 
 	
 	float value = max(noise * mask, 0.0);
 	value = smoothstep(0.5, 0.8, value);

@@ -19,6 +19,8 @@ var attack_fx_pool: Array[MeshInstance3D] = []
 var active_attack_fx: Array[Dictionary] = []
 
 var camera_shake_trauma: float = 0.0
+var current_cam_yaw: float = 0.0
+var target_cam_yaw: float = 0.0
 var kill_cam_timer: float = 0.0
 var kill_cam_focus_xz: Vector2 = Vector2.ZERO
 var hit_stop_active: bool = false
@@ -58,13 +60,15 @@ var _preview_tab_name: String = ""
 var _web_first_frame_reported: bool = false
 var _web_first_input_reported: bool = false
 var _preview_attack_vfx: bool = false
+var _preview_face_east: bool = false
+var _preview_face_south: bool = false
 var _camera_transitioning: bool = false
 
 func _ready() -> void:
 	_parse_cmdline_args()
 	if _preview_customize:
 		is_customizing = true
-	elif _simulate_input_preview or _preview_frenzy or _preview_last10s or _preview_result or _preview_clip or _preview_steal_juice or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1:
+	elif _simulate_input_preview or _preview_frenzy or _preview_last10s or _preview_result or _preview_clip or _preview_steal_juice or _preview_tutorial_phase2 or _preview_tutorial_dismissed or _skip_customize or _requested_map_theme != -1 or _preview_face_east or _preview_face_south:
 		is_customizing = false
 	else:
 		is_customizing = true
@@ -132,6 +136,30 @@ func _ready() -> void:
 	elif _preview_tutorial_dismissed and hud != null:
 		hud.intro_tutorial_timer = 0.0
 		hud._intro_elapsed = 6.0
+	if _preview_face_east and not server.combatants.is_empty():
+		var p0: MatchServer.CombatantState = server.combatants[0]
+		p0.pos = Vector2(-1.5, 2.0)
+		p0.prev_pos = p0.pos
+		p0.facing_angle = 0.0 # Facing East
+		current_cam_yaw = -PI * 0.5
+		target_cam_yaw = -PI * 0.5
+		camera.rotation_degrees = Vector3(balance.camera_pitch_deg, rad_to_deg(current_cam_yaw), 0.0)
+		if server.combatants.size() > 1:
+			var bot1: MatchServer.CombatantState = server.combatants[1]
+			bot1.pos = Vector2(2.5, 2.0) # Enemy situated East of player
+			bot1.prev_pos = bot1.pos
+	elif _preview_face_south and not server.combatants.is_empty():
+		var p0: MatchServer.CombatantState = server.combatants[0]
+		p0.pos = Vector2(0.0, -1.0)
+		p0.prev_pos = p0.pos
+		p0.facing_angle = PI * 0.5 # Facing South
+		current_cam_yaw = -PI
+		target_cam_yaw = -PI
+		camera.rotation_degrees = Vector3(balance.camera_pitch_deg, rad_to_deg(current_cam_yaw), 0.0)
+		if server.combatants.size() > 1:
+			var bot1: MatchServer.CombatantState = server.combatants[1]
+			bot1.pos = Vector2(0.0, 3.5) # Enemy situated South of player
+			bot1.prev_pos = bot1.pos
 	if _simulate_input_preview and virtual_joystick != null:
 		virtual_joystick.simulate_drag(Vector2(210.0, 868.0), Vector2(246.0, 832.0))
 
@@ -168,6 +196,12 @@ func _parse_cmdline_args() -> void:
 			_preview_steal_juice = true
 		elif arg == "--preview-attack-vfx":
 			_preview_attack_vfx = true
+			_skip_customize = true
+		elif arg == "--preview-face-east":
+			_preview_face_east = true
+			_skip_customize = true
+		elif arg == "--preview-face-south":
+			_preview_face_south = true
 			_skip_customize = true
 		elif arg == "--preview-tutorial-phase2":
 			_preview_tutorial_phase2 = true
@@ -299,6 +333,8 @@ func _setup_camera() -> void:
 	camera.keep_aspect = Camera3D.KEEP_WIDTH
 	camera.near = 0.2
 	camera.far = 95.0
+	current_cam_yaw = 0.0
+	target_cam_yaw = 0.0
 	if is_customizing:
 		camera.position = Vector3(0.0, 1.25, 3.45)
 		camera.rotation_degrees = Vector3(-7.0, 0.0, 0.0)
@@ -510,7 +546,15 @@ func _physics_process(_delta: float) -> void:
 		_mark_web_first_input()
 		if hud != null and hud.intro_tutorial_timer > 1.2 and combined.length_squared() > 0.05:
 			hud.intro_tutorial_timer = minf(hud.intro_tutorial_timer, 0.8)
-	server.submit_client_input(0, combined, _ability_queued, _attack_queued)
+
+	var move_to_submit := combined
+	if balance.camera_rotation_enabled and combined.length_squared() > 0.001:
+		var cam_forward_2d := Vector2(-sin(current_cam_yaw), -cos(current_cam_yaw))
+		var cam_right_2d := Vector2(cos(current_cam_yaw), -sin(current_cam_yaw))
+		move_to_submit = cam_right_2d * combined.x + cam_forward_2d * (-combined.y)
+		move_to_submit = move_to_submit.limit_length(1.0)
+
+	server.submit_client_input(0, move_to_submit, _ability_queued, _attack_queued)
 	_ability_queued = false
 	_attack_queued = false
 
@@ -561,7 +605,7 @@ func _process(delta: float) -> void:
 	_update_camera_follow(delta)
 	_update_target_ring()
 	arena_builder.sync_dropped_parts(server.dropped_parts, delta)
-	arena_builder.update_arena_vfx(delta)
+	arena_builder.update_arena_vfx(delta, current_cam_yaw)
 	_update_attack_fx(delta)
 	if hud != null:
 		hud.update_overhead_combatants(server.combatants, camera)
@@ -583,23 +627,41 @@ func _update_camera_follow(dt: float) -> void:
 		desired_fov = balance.camera_fov_deg - 2.4
 	camera.fov = lerpf(camera.fov, desired_fov, minf(1.0, 12.0 * dt))
 
+	if balance.camera_rotation_enabled:
+		if kill_cam_timer > 0.0:
+			var to_killer: Vector2 = kill_cam_focus_xz - player_state.pos
+			if to_killer.length_squared() > 0.1:
+				target_cam_yaw = -to_killer.angle() - PI * 0.5
+		else:
+			target_cam_yaw = -player_state.facing_angle - PI * 0.5
+		var t_yaw: float = 1.0 - exp(-balance.camera_rotation_smooth_rate * dt)
+		current_cam_yaw = lerp_angle(current_cam_yaw, target_cam_yaw, t_yaw)
+	else:
+		current_cam_yaw = 0.0
+
 	var safe_b: Vector2 = server.get_safe_bounds_xz()
-	var max_cam_x: float = maxf(4.0, safe_b.x - 4.5)
-	var max_cam_z: float = maxf(6.0, safe_b.y - 4.0)
-	var target_x: float = clampf(focus_pos.x * 0.82, -max_cam_x, max_cam_x)
-	var target_z: float = clampf(focus_pos.y + balance.camera_z_bias, -max_cam_z + balance.camera_z_bias, max_cam_z + balance.camera_z_bias)
-	var desired := Vector3(target_x, balance.camera_distance, target_z)
-	var t: float = 1.0 - exp(-balance.camera_smooth_rate * dt)
-	var base_cam_pos: Vector3 = camera.position.lerp(desired, t)
+	var clamped_focus_x: float = clampf(focus_pos.x, -safe_b.x + 1.5, safe_b.x - 1.5)
+	var clamped_focus_z: float = clampf(focus_pos.y, -safe_b.y + 1.5, safe_b.y - 1.5)
+
+	var cam_forward_dir := Vector3(-sin(current_cam_yaw), 0.0, -cos(current_cam_yaw))
+	var look_ahead: Vector3 = cam_forward_dir * (balance.camera_look_ahead_dist if balance.camera_rotation_enabled else 0.0)
+	var focus_3d := Vector3(clamped_focus_x, 0.7, clamped_focus_z) + look_ahead
+
+	var cam_back_offset := Vector3(sin(current_cam_yaw) * balance.camera_z_bias, balance.camera_distance, cos(current_cam_yaw) * balance.camera_z_bias)
+	var desired_cam_pos: Vector3 = focus_3d + cam_back_offset
+
+	var t_pos: float = 1.0 - exp(-balance.camera_smooth_rate * dt)
+	var base_cam_pos: Vector3 = camera.position.lerp(desired_cam_pos, t_pos)
 
 	var shake_off := Vector3.ZERO
 	if camera_shake_trauma > 0.0 and (hud == null or hud.screen_shake_enabled):
 		camera_shake_trauma = maxf(0.0, camera_shake_trauma - 2.8 * dt)
 		var amt: float = camera_shake_trauma * camera_shake_trauma * 0.28
-		shake_off = Vector3(sin(float(_frame_counter) * 1.9) * amt, cos(float(_frame_counter) * 2.3) * amt, 0.0)
+		var cam_right_dir := Vector3(cos(current_cam_yaw), 0.0, -sin(current_cam_yaw))
+		shake_off = cam_right_dir * (sin(float(_frame_counter) * 1.9) * amt) + Vector3(0.0, cos(float(_frame_counter) * 2.3) * amt, 0.0)
 
 	camera.position = base_cam_pos + shake_off
-	camera.rotation_degrees = Vector3(balance.camera_pitch_deg, 0.0, 0.0)
+	camera.rotation_degrees = Vector3(balance.camera_pitch_deg, rad_to_deg(current_cam_yaw), 0.0)
 
 func _update_target_ring() -> void:
 	if target_ring_mesh == null or server == null:
@@ -786,6 +848,8 @@ func _on_server_match_ended(leaderboard: Array[Dictionary], player_rank: int) ->
 		hud.on_match_ended(leaderboard, player_rank, balance.result_screen_duration_sec)
 
 func _on_server_match_restarted() -> void:
+	current_cam_yaw = 0.0
+	target_cam_yaw = 0.0
 	arena_builder.build_from_server(server)
 	for i: int in range(server.combatants.size()):
 		var c: MatchServer.CombatantState = server.combatants[i]
@@ -894,12 +958,15 @@ func _on_custom_play_pressed(slots: Dictionary, col: Color) -> void:
 	var safe_b: Vector2 = server.get_safe_bounds_xz()
 	var p0_y: float = server.combatants[0].pos.y if not server.combatants.is_empty() else 0.0
 	var p0_x: float = server.combatants[0].pos.x if not server.combatants.is_empty() else 0.0
+	current_cam_yaw = 0.0
+	target_cam_yaw = 0.0
 	var target_z: float = clampf(p0_y + balance.camera_z_bias, -safe_b.y + balance.camera_z_bias, safe_b.y + balance.camera_z_bias)
 	var target_x: float = clampf(p0_x, -safe_b.x + 2.5, safe_b.x - 2.5)
 	_camera_transitioning = true
 	var tw := create_tween().set_parallel(true)
 	tw.tween_property(camera, "position", Vector3(target_x, balance.camera_distance, target_z), 0.75).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.tween_property(camera, "rotation_degrees:x", balance.camera_pitch_deg, 0.75).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(camera, "rotation_degrees:y", 0.0, 0.75).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tw.finished.connect(func() -> void:
 		_camera_transitioning = false
 	)
@@ -923,6 +990,8 @@ func _on_hud_customize_requested() -> void:
 	if virtual_joystick != null:
 		virtual_joystick.visible = false
 	server.bots_enabled = false
+	current_cam_yaw = 0.0
+	target_cam_yaw = 0.0
 	camera.position = Vector3(0.0, 1.45, 3.4)
 	camera.rotation_degrees = Vector3(-8.0, 0.0, 0.0)
 	if not fighter_nodes.is_empty():

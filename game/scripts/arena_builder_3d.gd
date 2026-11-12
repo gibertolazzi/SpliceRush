@@ -3,6 +3,9 @@ extends Node3D
 
 const HAZARD_SHADER := preload("res://game/shaders/hazard_stripes.gdshader")
 const BEAM_SHADER := preload("res://game/shaders/power_beam.gdshader")
+const AURA_SPHERE_SHADER := preload("res://StatusFXFree/assets/BinbunVFX_Vol2/StatusFX/shader/aura_sphere.gdshader")
+const STREAKS_SHADER := preload("res://StatusFXFree/assets/BinbunVFX_Vol2/StatusFX/shader/streaks.gdshader")
+const STATUS_SHATTER_VFX := preload("res://StatusFXFree/assets/BinbunVFX_Vol2/StatusFX/effects/status/vfx_status_shatter.tscn")
 
 var destructible_nodes: Dictionary = {} # Vector2i -> Node3D
 var dropped_part_nodes: Dictionary = {} # int (drop_id) -> Node3D
@@ -19,6 +22,10 @@ var active_sparks: Array[Dictionary] = []
 var dust_pool: Array[MeshInstance3D] = []
 var active_dust: Array[Dictionary] = []
 var active_flying_parts: Array[Dictionary] = []
+var active_statusfx_impacts: Array[Dictionary] = []
+var active_statusfx_flashes: Array[Dictionary] = []
+var _statusfx_impact_pool: Array[MeshInstance3D] = []
+var _statusfx_flash_pool: Array[MeshInstance3D] = []
 
 var _stone_mat_a: StandardMaterial3D
 var _stone_mat_b: StandardMaterial3D
@@ -36,26 +43,69 @@ var _rarity_mats: Dictionary = {}
 
 func _ready() -> void:
 	_init_materials()
+	if _statusfx_impact_pool.is_empty():
+		_init_statusfx_pools()
+
+func _init_statusfx_pools() -> void:
+	_statusfx_impact_pool.clear()
+	active_statusfx_impacts.clear()
+	_statusfx_flash_pool.clear()
+	active_statusfx_flashes.clear()
+
+	for i: int in range(8):
+		var mi := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.55
+		sm.height = 1.10
+		sm.radial_segments = 16
+		sm.rings = 8
+		mi.mesh = sm
+		if AURA_SPHERE_SHADER != null:
+			var mat := ShaderMaterial.new()
+			mat.shader = AURA_SPHERE_SHADER
+			mat.set_shader_parameter("primary_color", Color(1.0, 0.85, 0.25))
+			mat.set_shader_parameter("emission", 3.5)
+			mi.material_override = mat
+		mi.visible = false
+		add_child(mi)
+		_statusfx_impact_pool.append(mi)
+
+	for i: int in range(8):
+		var fl := MeshInstance3D.new()
+		var qm := QuadMesh.new()
+		qm.size = Vector2(0.85, 0.85)
+		fl.mesh = qm
+		if STREAKS_SHADER != null:
+			var mat := ShaderMaterial.new()
+			mat.shader = STREAKS_SHADER
+			mat.set_shader_parameter("primary_color", Color(1.0, 0.85, 0.25))
+			mat.set_shader_parameter("secondary_color", Color(1.0, 0.45, 0.15))
+			mat.set_shader_parameter("emission", 4.0)
+			mat.set_shader_parameter("billboard", true)
+			fl.material_override = mat
+		fl.visible = false
+		add_child(fl)
+		_statusfx_flash_pool.append(fl)
 
 func _init_materials() -> void:
 	_stone_mat_a = StandardMaterial3D.new()
-	_stone_mat_a.albedo_color = Color(0.24, 0.21, 0.32) # Dark desaturated slate-lavender
+	_stone_mat_a.albedo_color = Color(0.36, 0.30, 0.46) # Warm lavender stone slabs
 	_stone_mat_a.roughness = 0.84
 
 	_stone_mat_b = StandardMaterial3D.new()
-	_stone_mat_b.albedo_color = Color(0.18, 0.16, 0.26) # Deeper desaturated slate
+	_stone_mat_b.albedo_color = Color(0.30, 0.25, 0.40) # Shaded stone slabs
 	_stone_mat_b.roughness = 0.88
 
 	_stone_rim_mat = StandardMaterial3D.new()
-	_stone_rim_mat.albedo_color = Color(0.42, 0.38, 0.52) # Light stone rim & crack highlight
+	_stone_rim_mat.albedo_color = Color(0.50, 0.44, 0.60) # Sunlit stone rim
 	_stone_rim_mat.roughness = 0.78
 
 	_stone_dark_mat = StandardMaterial3D.new()
-	_stone_dark_mat.albedo_color = Color(0.11, 0.09, 0.16) # Deep cliff foundation
+	_stone_dark_mat.albedo_color = Color(0.14, 0.11, 0.22) # Cliff foundation
 	_stone_dark_mat.roughness = 0.92
 
 	_debris_mat = StandardMaterial3D.new()
-	_debris_mat.albedo_color = Color(0.90, 0.84, 0.74) # Bright cream-sandstone fractured chunks
+	_debris_mat.albedo_color = Color(0.78, 0.68, 0.56) # Warm sandstone fractured chunks
 	_debris_mat.roughness = 0.72
 
 	_gold_glow_mat = StandardMaterial3D.new()
@@ -82,12 +132,12 @@ func _init_materials() -> void:
 	_cloud_mat_a = StandardMaterial3D.new()
 	_cloud_mat_a.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_cloud_mat_a.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_cloud_mat_a.albedo_color = Color(0.36, 0.24, 0.62, 0.45)
+	_cloud_mat_a.albedo_color = Color(0.78, 0.68, 0.98, 0.52)
 
 	_cloud_mat_b = StandardMaterial3D.new()
 	_cloud_mat_b.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_cloud_mat_b.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_cloud_mat_b.albedo_color = Color(0.24, 0.16, 0.44, 0.60)
+	_cloud_mat_b.albedo_color = Color(0.62, 0.52, 0.90, 0.62)
 
 	for r: int in [PartData.Rarity.COMMON, PartData.Rarity.RARE, PartData.Rarity.EPIC, PartData.Rarity.LEGENDARY]:
 		var rmat := StandardMaterial3D.new()
@@ -100,23 +150,23 @@ func apply_theme_materials(theme: MatchServer.MapTheme) -> void:
 		_init_materials()
 	match theme:
 		MatchServer.MapTheme.CYBER_FACTORY:
-			_stone_mat_a.albedo_color = Color(0.16, 0.18, 0.22)
-			_stone_mat_b.albedo_color = Color(0.12, 0.14, 0.18)
-			_stone_dark_mat.albedo_color = Color(0.08, 0.09, 0.12)
-			_stone_rim_mat.albedo_color = Color(0.32, 0.38, 0.46)
-			_debris_mat.albedo_color = Color(0.72, 0.82, 0.92)
+			_stone_mat_a.albedo_color = Color(0.28, 0.31, 0.38)
+			_stone_mat_b.albedo_color = Color(0.21, 0.24, 0.31)
+			_stone_dark_mat.albedo_color = Color(0.11, 0.13, 0.19)
+			_stone_rim_mat.albedo_color = Color(0.46, 0.52, 0.62)
+			_debris_mat.albedo_color = Color(0.70, 0.78, 0.88)
 		MatchServer.MapTheme.FLOATING_HEX:
-			_stone_mat_a.albedo_color = Color(0.28, 0.34, 0.46)
-			_stone_mat_b.albedo_color = Color(0.20, 0.24, 0.36)
-			_stone_dark_mat.albedo_color = Color(0.12, 0.15, 0.24)
-			_stone_rim_mat.albedo_color = Color(0.50, 0.58, 0.72)
-			_debris_mat.albedo_color = Color(0.85, 0.90, 1.0)
+			_stone_mat_a.albedo_color = Color(0.38, 0.44, 0.56)
+			_stone_mat_b.albedo_color = Color(0.30, 0.36, 0.48)
+			_stone_dark_mat.albedo_color = Color(0.15, 0.19, 0.29)
+			_stone_rim_mat.albedo_color = Color(0.54, 0.62, 0.76)
+			_debris_mat.albedo_color = Color(0.80, 0.86, 0.96)
 		_:
-			_stone_mat_a.albedo_color = Color(0.24, 0.21, 0.32)
-			_stone_mat_b.albedo_color = Color(0.18, 0.16, 0.26)
-			_stone_dark_mat.albedo_color = Color(0.11, 0.09, 0.16)
-			_stone_rim_mat.albedo_color = Color(0.42, 0.38, 0.52)
-			_debris_mat.albedo_color = Color(0.90, 0.84, 0.74)
+			_stone_mat_a.albedo_color = Color(0.36, 0.30, 0.46)
+			_stone_mat_b.albedo_color = Color(0.30, 0.25, 0.40)
+			_stone_dark_mat.albedo_color = Color(0.14, 0.11, 0.22)
+			_stone_rim_mat.albedo_color = Color(0.50, 0.44, 0.60)
+			_debris_mat.albedo_color = Color(0.78, 0.68, 0.56)
 
 func build_from_server(server: MatchServer) -> void:
 	if _stone_mat_a == null:
@@ -129,11 +179,23 @@ func build_from_server(server: MatchServer) -> void:
 	floor_cell_map.clear()
 	active_debris.clear()
 	debris_pool.clear()
+	impact_star_pool.clear()
+	active_impact_stars.clear()
+	spark_pool.clear()
+	active_sparks.clear()
+	dust_pool.clear()
+	active_dust.clear()
+	active_flying_parts.clear()
+	_statusfx_impact_pool.clear()
+	active_statusfx_impacts.clear()
+	_statusfx_flash_pool.clear()
+	active_statusfx_flashes.clear()
 
 	var tile: float = server.balance.tile_size
 	_build_floor_multimesh(server, tile)
 	_build_grid_props(server, tile)
 	_build_void_clouds(server)
+	_build_sky_decor(server)
 
 	var is_static_preview: bool = false
 	for arg: String in OS.get_cmdline_user_args():
@@ -310,13 +372,90 @@ func _build_floor_multimesh(server: MatchServer, tile: float) -> void:
 			cells_b.append(xform)
 
 	# MultiMesh for checkered slabs with distinct stone tones
-	var mm_a: MultiMesh = _add_slab_multimesh(cells_a, tile * 0.93, _stone_mat_a)
+	var mm_a: MultiMesh = _add_slab_multimesh(cells_a, tile * 0.97, _stone_mat_a)
 	for i: int in range(cells_a_coords.size()):
 		floor_cell_map[cells_a_coords[i]] = {"mm": mm_a, "idx": i}
 
-	var mm_b: MultiMesh = _add_slab_multimesh(cells_b, tile * 0.91, _stone_mat_b)
+	var mm_b: MultiMesh = _add_slab_multimesh(cells_b, tile * 0.96, _stone_mat_b)
 	for i: int in range(cells_b_coords.size()):
 		floor_cell_map[cells_b_coords[i]] = {"mm": mm_b, "idx": i}
+
+func _build_sky_decor(_server: MatchServer) -> void:
+	var root := Node3D.new()
+	root.name = "SkyDecor"
+	add_child(root)
+
+	# Floating islands beyond the arena rim (key-art horizon).
+	_build_far_island(root, Vector3(-27.0, 1.4, -49.0), 12.0, 8.0)
+	_build_far_island(root, Vector3(24.0, 2.2, -57.0), 15.0, 10.0)
+	_build_far_island(root, Vector3(-5.0, 0.6, -66.0), 20.0, 13.0)
+	_build_far_island(root, Vector3(39.0, 0.8, -45.0), 9.0, 6.0)
+
+	# Broken towers on the horizon.
+	var far_mat := StandardMaterial3D.new()
+	far_mat.albedo_color = Color(0.24, 0.18, 0.38)
+	far_mat.roughness = 0.92
+
+	var tower_positions: Array[Vector3] = [
+		Vector3(-19.0, -2.0, -58.0),
+		Vector3(-11.0, -2.0, -63.0),
+		Vector3(9.0, -2.0, -61.0),
+		Vector3(31.0, -2.0, -53.0),
+	]
+	for i: int in range(tower_positions.size()):
+		var tp: Vector3 = tower_positions[i]
+		var h: float = 4.6 + float(i % 3) * 1.5
+		_spawn_box(root, Vector3(2.2, h, 2.2), tp + Vector3(0.0, h * 0.5, 0.0), far_mat)
+		_spawn_box(root, Vector3(1.2, 0.5, 1.2), tp + Vector3(0.0, h + 0.2, 0.0), far_mat)
+
+	# Voxel cloud banks hugging the arena rim.
+	var cloud_positions: Array[Vector3] = [
+		Vector3(-25.0, 0.7, -36.0),
+		Vector3(-12.0, 1.2, -40.0),
+		Vector3(2.0, 0.4, -38.0),
+		Vector3(15.0, 1.0, -41.0),
+		Vector3(28.0, 0.6, -37.0),
+		Vector3(-33.0, 2.0, -43.0),
+		Vector3(34.0, 1.8, -45.0),
+	]
+	for i: int in range(cloud_positions.size()):
+		var cp: Vector3 = cloud_positions[i]
+		var rot := Vector3(0.0, 20.0 * float(i), 0.0)
+		_spawn_box(root, Vector3(7.2, 1.4, 3.6), cp, _cloud_mat_a, rot)
+		_spawn_box(root, Vector3(4.4, 1.0, 2.8), cp + Vector3(3.0, 0.35, 0.5), _cloud_mat_b, rot)
+		_spawn_box(root, Vector3(3.2, 0.9, 2.2), cp + Vector3(-3.5, 0.2, 0.3), _cloud_mat_a, rot)
+
+	# Higher cloud puffs breaking the horizon silhouette.
+	var high_cloud_positions: Array[Vector3] = [
+		Vector3(-16.0, 4.2, -40.0),
+		Vector3(8.0, 5.0, -42.0),
+		Vector3(26.0, 4.6, -38.0),
+	]
+	for i: int in range(high_cloud_positions.size()):
+		var hcp: Vector3 = high_cloud_positions[i]
+		var hrot := Vector3(0.0, 24.0 * float(i), 0.0)
+		_spawn_box(root, Vector3(8.0, 1.4, 3.2), hcp, _cloud_mat_a, hrot)
+		_spawn_box(root, Vector3(5.0, 1.0, 2.6), hcp + Vector3(3.2, 0.2, 0.4), _cloud_mat_b, hrot)
+
+	# Small floating rocks framing the play space.
+	var rock_positions: Array[Vector3] = [
+		Vector3(-27.0, 3.2, -12.0),
+		Vector3(27.5, 4.0, -6.0),
+		Vector3(-26.5, 2.6, 14.0),
+		Vector3(26.0, 3.4, 18.0),
+	]
+	for i: int in range(rock_positions.size()):
+		var rp: Vector3 = rock_positions[i]
+		_spawn_box(root, Vector3(2.2, 1.6, 2.0), rp, _stone_mat_b, Vector3(8.0 * float(i), 25.0 * float(i), -6.0))
+		_spawn_box(root, Vector3(1.2, 0.9, 1.0), rp + Vector3(0.6, 1.1, 0.2), _stone_rim_mat, Vector3(0.0, 15.0, 12.0))
+
+func _build_far_island(root: Node3D, pos: Vector3, width: float, depth: float) -> void:
+	_spawn_box(root, Vector3(width, 0.8, depth), pos, _stone_mat_b)
+	_spawn_box(root, Vector3(width * 0.82, 2.6, depth * 0.82), pos + Vector3(0.0, -1.6, 0.0), _stone_dark_mat)
+	_spawn_box(root, Vector3(width * 0.55, 2.4, depth * 0.55), pos + Vector3(0.0, -3.9, 0.0), _stone_dark_mat)
+	_spawn_box(root, Vector3(1.4, 4.8, 1.4), pos + Vector3(-width * 0.22, 2.7, 0.0), _stone_mat_a, Vector3(0.0, 12.0, 4.0))
+	_spawn_box(root, Vector3(1.0, 3.4, 1.0), pos + Vector3(width * 0.26, 2.0, depth * 0.16), _stone_mat_a, Vector3(0.0, -18.0, -5.0))
+	_spawn_box(root, Vector3(width * 0.12, 1.8, depth * 0.12), pos + Vector3(width * 0.05, 1.2, -depth * 0.18), _stone_mat_a, Vector3(0.0, 28.0, 8.0))
 
 func _build_void_clouds(server: MatchServer) -> void:
 	var clouds_root := Node3D.new()
@@ -400,8 +539,8 @@ func _build_power_pedestal(pos: Vector3) -> void:
 
 	var cyl_outer := MeshInstance3D.new()
 	var cm_outer := CylinderMesh.new()
-	cm_outer.top_radius = 2.1
-	cm_outer.bottom_radius = 2.4
+	cm_outer.top_radius = 1.80
+	cm_outer.bottom_radius = 2.05
 	cm_outer.height = 0.42
 	cm_outer.radial_segments = 6
 	cyl_outer.mesh = cm_outer
@@ -409,47 +548,96 @@ func _build_power_pedestal(pos: Vector3) -> void:
 	cyl_outer.material_override = _stone_dark_mat
 	ped.add_child(cyl_outer)
 
+	var ped_gold_mat := StandardMaterial3D.new()
+	ped_gold_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ped_gold_mat.albedo_color = Color(0.96, 0.66, 0.16)
+
 	var cyl_gold := MeshInstance3D.new()
 	var cm_gold := CylinderMesh.new()
-	cm_gold.top_radius = 1.65
-	cm_gold.bottom_radius = 1.85
-	cm_gold.height = 0.35
+	cm_gold.top_radius = 1.30
+	cm_gold.bottom_radius = 1.45
+	cm_gold.height = 0.30
 	cm_gold.radial_segments = 6
 	cyl_gold.mesh = cm_gold
 	cyl_gold.position = Vector3(0.0, 0.48, 0.0)
-	cyl_gold.material_override = _gold_glow_mat
+	cyl_gold.material_override = ped_gold_mat
 	ped.add_child(cyl_gold)
 
+	# StatusFX Pedestal Ground Streaks
+	if STREAKS_SHADER != null:
+		var streaks_mat := ShaderMaterial.new()
+		streaks_mat.shader = STREAKS_SHADER
+		streaks_mat.set_shader_parameter("primary_color", Color(1.0, 0.88, 0.35))
+		streaks_mat.set_shader_parameter("secondary_color", Color(1.0, 0.40, 0.10))
+		streaks_mat.set_shader_parameter("emission", 3.2)
+		streaks_mat.set_shader_parameter("billboard", false)
+
+		var streaks_mi := MeshInstance3D.new()
+		var qm := QuadMesh.new()
+		qm.size = Vector2(3.6, 3.6)
+		streaks_mi.mesh = qm
+		streaks_mi.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+		streaks_mi.position = Vector3(0.0, 0.65, 0.0)
+		streaks_mi.material_override = streaks_mat
+		ped.add_child(streaks_mi)
+
 	power_cube_node = Node3D.new()
-	power_cube_node.position = Vector3(0.0, 1.85, 0.0)
+	power_cube_node.position = Vector3(0.0, 1.45, 0.0)
 	ped.add_child(power_cube_node)
-	_spawn_box(power_cube_node, Vector3(1.32, 1.32, 1.32), Vector3.ZERO, _gold_glow_mat)
+	_spawn_box(power_cube_node, Vector3(0.92, 0.92, 0.92), Vector3.ZERO, ped_gold_mat)
+
+	# StatusFX Glowing Aura Sphere surrounding the Power Part cube
+	if AURA_SPHERE_SHADER != null:
+		var aura_mat := ShaderMaterial.new()
+		aura_mat.shader = AURA_SPHERE_SHADER
+		aura_mat.set_shader_parameter("primary_color", Color(1.0, 0.88, 0.25))
+		aura_mat.set_shader_parameter("secondary_color", Color(1.0, 0.42, 0.10))
+		aura_mat.set_shader_parameter("tertiary_color", Color(0.85, 0.15, 0.45))
+		aura_mat.set_shader_parameter("emission", 2.8)
+		aura_mat.set_shader_parameter("noise_scale", Vector2(2.5, 1.2))
+		aura_mat.set_shader_parameter("noise_scroll", Vector2(0.15, 0.5))
+		var n_tex := NoiseTexture2D.new()
+		n_tex.width = 128
+		n_tex.height = 128
+		var fnl := FastNoiseLite.new()
+		fnl.noise_type = FastNoiseLite.TYPE_SIMPLEX
+		n_tex.noise = fnl
+		aura_mat.set_shader_parameter("noise_texture", n_tex)
+
+		var aura_sphere := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.88
+		sm.height = 1.76
+		aura_sphere.mesh = sm
+		aura_sphere.material_override = aura_mat
+		power_cube_node.add_child(aura_sphere)
 	# Question mark on all 4 vertical faces of the spinning power cube
-	_build_question_mark(power_cube_node, Vector3(0.0, 0.0, 0.68), 0.78, _white_glow_mat, Vector3.ZERO)
-	_build_question_mark(power_cube_node, Vector3(0.0, 0.0, -0.68), 0.78, _white_glow_mat, Vector3(0.0, 180.0, 0.0))
-	_build_question_mark(power_cube_node, Vector3(0.68, 0.0, 0.0), 0.78, _white_glow_mat, Vector3(0.0, 90.0, 0.0))
-	_build_question_mark(power_cube_node, Vector3(-0.68, 0.0, 0.0), 0.78, _white_glow_mat, Vector3(0.0, -90.0, 0.0))
+	_build_question_mark(power_cube_node, Vector3(0.0, 0.0, 0.47), 0.54, _white_glow_mat, Vector3.ZERO)
+	_build_question_mark(power_cube_node, Vector3(0.0, 0.0, -0.47), 0.54, _white_glow_mat, Vector3(0.0, 180.0, 0.0))
+	_build_question_mark(power_cube_node, Vector3(0.47, 0.0, 0.0), 0.54, _white_glow_mat, Vector3(0.0, 90.0, 0.0))
+	_build_question_mark(power_cube_node, Vector3(-0.47, 0.0, 0.0), 0.54, _white_glow_mat, Vector3(0.0, -90.0, 0.0))
 
 	var beam_mat := ShaderMaterial.new()
 	beam_mat.shader = BEAM_SHADER
+	beam_mat.set_shader_parameter("beam_color", Color(1.0, 0.62, 0.10, 0.16))
 	var beam_mi := MeshInstance3D.new()
 	var beam_cyl := CylinderMesh.new()
-	beam_cyl.top_radius = 1.15
-	beam_cyl.bottom_radius = 1.45
-	beam_cyl.height = 36.0
+	beam_cyl.top_radius = 0.52
+	beam_cyl.bottom_radius = 0.70
+	beam_cyl.height = 26.0
 	beam_cyl.radial_segments = 16
 	beam_cyl.cap_top = false
 	beam_cyl.cap_bottom = false
 	beam_mi.mesh = beam_cyl
-	beam_mi.position = Vector3(0.0, 18.0, 0.0)
+	beam_mi.position = Vector3(0.0, 13.0, 0.0)
 	beam_mi.material_override = beam_mat
 	ped.add_child(beam_mi)
 
 	var omni := OmniLight3D.new()
-	omni.light_color = Color(1.0, 0.76, 0.24)
-	omni.light_energy = 2.8
-	omni.omni_range = 11.0
-	omni.position = Vector3(0.0, 2.4, 0.0)
+	omni.light_color = Color(1.0, 0.78, 0.28)
+	omni.light_energy = 1.6
+	omni.omni_range = 8.0
+	omni.position = Vector3(0.0, 2.0, 0.0)
 	ped.add_child(omni)
 
 func _build_question_mark(parent: Node3D, offset: Vector3, scale_f: float, mat: Material, rot_deg: Vector3 = Vector3.ZERO) -> void:
@@ -483,8 +671,12 @@ func _build_background_ruins_and_cliffs(server: MatchServer, is_static_preview: 
 	var safe_b: Vector2 = server.get_safe_bounds_xz()
 	var north_z: float = -safe_b.y - 2.8
 
-	# North ruins & ruined monolithic pillars
-	_spawn_box(ruins, Vector3(safe_b.x * 2.2, 3.2, 2.4), Vector3(0.0, 1.2, north_z), ruin_mat)
+	# Broken north rampart: open gaps keep the horizon readable instead of a flat wall.
+	var wall_offsets: Array[float] = [-0.74, 0.02, 0.74]
+	for i: int in range(wall_offsets.size()):
+		var wx: float = safe_b.x * wall_offsets[i]
+		var wh: float = 1.4 + float(i % 3) * 0.8
+		_spawn_box(ruins, Vector3(4.8, wh, 2.0), Vector3(wx, wh * 0.5, north_z), ruin_mat, Vector3(0.0, 4.0 * float(i), 0.0))
 	_spawn_box(ruins, Vector3(3.4, 5.8, 3.2), Vector3(-safe_b.x * 0.65, 2.6, north_z + 0.4), ruin_mat)
 	_spawn_box(ruins, Vector3(3.4, 5.8, 3.2), Vector3(safe_b.x * 0.65, 2.6, north_z + 0.4), ruin_mat)
 	_spawn_box(ruins, Vector3(2.4, 1.8, 2.2), Vector3(-safe_b.x * 0.85, 4.8, north_z - 0.8), ruin_mat, Vector3(6.0, 18.0, -8.0))
@@ -575,6 +767,9 @@ func _init_vfx_pools() -> void:
 		add_child(dp)
 		dust_pool.append(dp)
 
+	# 5. StatusFX pools (muzzle flashes & impacts)
+	_init_statusfx_pools()
+
 func spawn_impact_debris(world_xz: Vector2, count: int = 4) -> void:
 	for i: int in range(count):
 		if debris_pool.is_empty():
@@ -588,6 +783,56 @@ func spawn_impact_debris(world_xz: Vector2, count: int = 4) -> void:
 			"vel": Vector3(cos(angle) * 3.8, 5.2 + float(i % 2) * 1.4, sin(angle) * 3.8),
 			"ttl": 0.55,
 		})
+
+func spawn_statusfx_muzzle_flash(world_xz: Vector2, muzzle_col: Color = Color(1.0, 0.85, 0.25)) -> void:
+	if _statusfx_flash_pool.is_empty():
+		return
+	var fl: MeshInstance3D = _statusfx_flash_pool.pop_back()
+	fl.visible = true
+	fl.position = Vector3(world_xz.x, 1.25, world_xz.y)
+	fl.scale = Vector3(0.4, 0.4, 0.4)
+	var smat := fl.material_override as ShaderMaterial
+	if smat != null:
+		smat.set_shader_parameter("primary_color", muzzle_col)
+	active_statusfx_flashes.append({
+		"node": fl,
+		"ttl": 0.08,
+		"max_ttl": 0.08,
+	})
+
+func spawn_statusfx_impact(world_xz: Vector2, is_crit_or_ko: bool = false, impact_col: Color = Color(1.0, 0.85, 0.25)) -> void:
+	if is_crit_or_ko and STATUS_SHATTER_VFX != null and is_inside_tree():
+		var tree := get_tree()
+		if tree != null:
+			var vfx: Node3D = STATUS_SHATTER_VFX.instantiate() as Node3D
+			vfx.position = Vector3(world_xz.x, 1.20, world_xz.y)
+			add_child(vfx)
+			var ap: AnimationPlayer = vfx.find_child("AnimationPlayer", true, false) as AnimationPlayer
+			if ap != null and ap.has_animation("open"):
+				ap.play("open")
+			var t: SceneTreeTimer = tree.create_timer(0.70, true, false, true)
+			t.timeout.connect(func() -> void:
+				if is_instance_valid(vfx):
+					vfx.queue_free()
+			)
+
+	if not _statusfx_impact_pool.is_empty():
+		var mi: MeshInstance3D = _statusfx_impact_pool.pop_back()
+		mi.visible = true
+		mi.position = Vector3(world_xz.x, 1.15, world_xz.y)
+		mi.scale = Vector3(0.2, 0.2, 0.2)
+		var smat := mi.material_override as ShaderMaterial
+		if smat != null:
+			smat.set_shader_parameter("primary_color", impact_col)
+		active_statusfx_impacts.append({
+			"node": mi,
+			"ttl": 0.18,
+			"max_ttl": 0.18,
+			"peak_scale": 2.2 if is_crit_or_ko else 1.35,
+		})
+
+	spawn_impact_star(world_xz, is_crit_or_ko)
+	spawn_impact_debris(world_xz, 4 if is_crit_or_ko else 2)
 
 func spawn_impact_star(world_xz: Vector2, is_crit_or_ko: bool = false) -> void:
 	var star_node: Node3D = null
@@ -703,7 +948,7 @@ func on_block_damaged(cell: Vector2i, _remaining_hp: int, destroyed: bool, world
 			n.queue_free()
 		destructible_nodes.erase(cell)
 
-func update_arena_vfx(dt: float) -> void:
+func update_arena_vfx(dt: float, cam_yaw: float = 0.0) -> void:
 	if power_cube_node != null and is_instance_valid(power_cube_node):
 		power_cube_node.rotate_y(1.4 * dt)
 		power_cube_node.position.y = 1.45 + sin(float(Time.get_ticks_msec()) * 0.004) * 0.14
@@ -751,7 +996,7 @@ func update_arena_vfx(dt: float) -> void:
 			s_node.scale = Vector3.ONE * cur_scale
 			var r: float = float(s_data["rot"]) + 16.0 * dt
 			s_data["rot"] = r
-			s_node.rotation_degrees = Vector3(58.0, 0.0, r * 57.2958)
+			s_node.rotation_degrees = Vector3(58.0, rad_to_deg(cam_yaw), r * 57.2958)
 			s_data["ttl"] = ttl
 		star_idx -= 1
 
@@ -833,6 +1078,35 @@ func update_arena_vfx(dt: float) -> void:
 			active_flying_parts.remove_at(fly_idx)
 		fly_idx -= 1
 
+	# 6. Update StatusFX flashes
+	var f_idx: int = active_statusfx_flashes.size() - 1
+	while f_idx >= 0:
+		var item: Dictionary = active_statusfx_flashes[f_idx]
+		item["ttl"] = float(item["ttl"]) - dt
+		var fl: MeshInstance3D = item["node"]
+		var prog: float = clampf(1.0 - (float(item["ttl"]) / float(item["max_ttl"])), 0.0, 1.0)
+		fl.scale = Vector3.ONE * lerpf(0.4, 0.9, prog)
+		if float(item["ttl"]) <= 0.0:
+			fl.visible = false
+			_statusfx_flash_pool.append(fl)
+			active_statusfx_flashes.remove_at(f_idx)
+		f_idx -= 1
+
+	# 7. Update StatusFX impacts
+	var imp_idx: int = active_statusfx_impacts.size() - 1
+	while imp_idx >= 0:
+		var item: Dictionary = active_statusfx_impacts[imp_idx]
+		item["ttl"] = float(item["ttl"]) - dt
+		var mi: MeshInstance3D = item["node"]
+		var prog: float = clampf(1.0 - (float(item["ttl"]) / float(item["max_ttl"])), 0.0, 1.0)
+		var current_scale: float = lerpf(0.3, float(item["peak_scale"]), sin(prog * PI * 0.5))
+		mi.scale = Vector3.ONE * current_scale
+		if float(item["ttl"]) <= 0.0:
+			mi.visible = false
+			_statusfx_impact_pool.append(mi)
+			active_statusfx_impacts.remove_at(imp_idx)
+		imp_idx -= 1
+
 func _spawn_box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material, rot_deg: Vector3 = Vector3.ZERO) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var bm := BoxMesh.new()
@@ -843,3 +1117,11 @@ func _spawn_box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material, rot_
 	mi.material_override = mat
 	parent.add_child(mi)
 	return mi
+
+func _exit_tree() -> void:
+	for mi: MeshInstance3D in _statusfx_impact_pool:
+		if is_instance_valid(mi):
+			mi.material_override = null
+	for fl: MeshInstance3D in _statusfx_flash_pool:
+		if is_instance_valid(fl):
+			fl.material_override = null

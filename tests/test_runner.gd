@@ -32,6 +32,7 @@ func _initialize() -> void:
 		"test_characters_collection_models_and_mixamo_rigs",
 		"test_reference_mockup_vertical_hud",
 		"test_ingame_character_visibility_and_walk_retargeting",
+		"test_camera_follow_rotation_and_enemy_visibility",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -1079,4 +1080,82 @@ func test_ingame_character_visibility_and_walk_retargeting() -> bool:
 	assert_true(base_hips_origin.is_equal_approx(walking_hips_origin), "hips_pose_anchored_during_walk")
 
 	fighter.free()
+	return true
+
+func test_camera_follow_rotation_and_enemy_visibility() -> bool:
+	# 1. Verify BalanceConfig has camera rotation & look-ahead parameters
+	var cfg: BalanceConfig = load("res://shared/default_balance.tres") as BalanceConfig
+	assert_true(cfg != null, "balance_cfg_loaded_for_camera")
+	assert_true(cfg.camera_rotation_enabled, "camera_rotation_enabled_by_default")
+	assert_true(cfg.camera_rotation_smooth_rate >= 4.0, "camera_rotation_smooth_rate_tuned")
+	assert_true(cfg.camera_look_ahead_dist >= 1.0, "camera_look_ahead_dist_configured")
+
+	# 2. Test mathematical rotation angles for all 4 headings:
+	# North (-PI/2) -> yaw = 0
+	var yaw_north: float = wrapf(-(-PI * 0.5) - PI * 0.5, -PI, PI)
+	assert_true(is_zero_approx(yaw_north), "yaw_north_is_zero")
+	# East (0.0) -> yaw = -PI/2 (-90 deg)
+	var yaw_east: float = wrapf(-(0.0) - PI * 0.5, -PI, PI)
+	assert_true(is_equal_approx(yaw_east, -PI * 0.5), "yaw_east_is_minus_90_deg")
+	# South (PI/2) -> yaw = -PI / +PI (180 deg)
+	var yaw_south: float = wrapf(-(PI * 0.5) - PI * 0.5, -PI, PI)
+	assert_true(is_equal_approx(absf(yaw_south), PI), "yaw_south_is_180_deg")
+	# West (PI) -> yaw = +PI/2 (+90 deg)
+	var yaw_west: float = wrapf(-(PI) - PI * 0.5, -PI, PI)
+	assert_true(is_equal_approx(yaw_west, PI * 0.5), "yaw_west_is_plus_90_deg")
+
+	# 3. Test camera-relative input transformation:
+	# Screen UP (0, -1) when facing North (yaw 0) -> World (0, -1)
+	var fwd_n := Vector2(-sin(0.0), -cos(0.0))
+	var right_n := Vector2(cos(0.0), -sin(0.0))
+	var world_up_n: Vector2 = right_n * 0.0 + fwd_n * (-(-1.0))
+	assert_true(world_up_n.is_equal_approx(Vector2(0.0, -1.0)), "input_up_facing_north_moves_north")
+
+	# Screen UP (0, -1) when facing East (yaw -PI/2) -> World (1, 0)
+	var fwd_e := Vector2(-sin(-PI * 0.5), -cos(-PI * 0.5))
+	var right_e := Vector2(cos(-PI * 0.5), -sin(-PI * 0.5))
+	var world_up_e: Vector2 = right_e * 0.0 + fwd_e * (-(-1.0))
+	assert_true(world_up_e.is_equal_approx(Vector2(1.0, 0.0)), "input_up_facing_east_moves_east")
+
+	# Screen RIGHT (1, 0) when facing East (yaw -PI/2) -> World (0, 1) (South)
+	var world_right_e: Vector2 = right_e * 1.0 + fwd_e * 0.0
+	assert_true(world_right_e.is_equal_approx(Vector2(0.0, 1.0)), "input_right_facing_east_moves_south")
+
+	# Screen UP (0, -1) when facing South (yaw PI) -> World (0, 1)
+	var fwd_s := Vector2(-sin(PI), -cos(PI))
+	var world_up_s: Vector2 = fwd_s * 1.0
+	assert_true(world_up_s.is_equal_approx(Vector2(0.0, 1.0)), "input_up_facing_south_moves_south")
+
+	# 4. Test MainArenaController camera follow in action
+	var arena_ctrl := MainArenaController.new()
+	arena_ctrl._skip_customize = true
+	root.add_child(arena_ctrl)
+
+	# Initial yaw is zero (facing North)
+	assert_true(is_zero_approx(arena_ctrl.current_cam_yaw), "initial_cam_yaw_is_zero")
+	assert_true(is_zero_approx(arena_ctrl.target_cam_yaw), "initial_target_cam_yaw_is_zero")
+
+	# Set player facing East (facing_angle = 0.0)
+	var p0: MatchServer.CombatantState = arena_ctrl.server.combatants[0]
+	p0.facing_angle = 0.0
+	p0.pos = Vector2(0.0, 0.0)
+
+	# Step camera update for 1.0 second
+	for _i: int in range(60):
+		arena_ctrl._update_camera_follow(0.0166)
+
+	# Camera yaw should have smoothly converged toward -PI/2 (-90 deg)
+	assert_true(arena_ctrl.current_cam_yaw < -0.8, "cam_yaw_smoothly_rotated_east")
+	assert_true(is_equal_approx(arena_ctrl.target_cam_yaw, -PI * 0.5), "target_cam_yaw_is_minus_pi_over_two")
+
+	# Camera position should be located West of the player (X < 0) looking East
+	assert_true(arena_ctrl.camera.position.x < -1.0, "camera_is_behind_player_to_the_west")
+	assert_true(arena_ctrl.camera.rotation_degrees.y < -40.0, "camera_rotation_y_pitched_toward_east")
+
+	# Verify enemy visibility in front of player:
+	# Enemy placed 3 units East of player (0.0 + 3.0, 0.0)
+	var enemy_pos_3d := Vector3(3.0, 1.0, 0.0)
+	assert_true(not arena_ctrl.camera.is_position_behind(enemy_pos_3d), "enemy_in_front_is_not_behind_camera")
+
+	arena_ctrl.free()
 	return true

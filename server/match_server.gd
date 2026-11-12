@@ -290,6 +290,17 @@ func setup_arena_grid() -> void:
 				grid_cells[dc] = CellType.DESTRUCTIBLE_BLOCK
 				block_hp[dc] = balance.destructible_block_hp
 
+	# Mid-field cover: the arena needs silhouettes and cover, not an empty runway.
+	var cover_cells: Array[Vector2i] = [
+		Vector2i(-5, -4), Vector2i(-4, -4), Vector2i(5, 4), Vector2i(4, 4),
+		Vector2i(-6, 6), Vector2i(6, 6), Vector2i(-5, 8), Vector2i(5, -8),
+		Vector2i(-6, -6), Vector2i(6, -6), Vector2i(-7, -8), Vector2i(7, -8),
+	]
+	for cc: Vector2i in cover_cells:
+		if int(grid_cells.get(cc, CellType.VOID)) == int(CellType.FLOOR):
+			grid_cells[cc] = CellType.DESTRUCTIBLE_BLOCK
+			block_hp[cc] = balance.destructible_block_hp
+
 	var ped_cells: Array[Vector2i] = [
 		Vector2i(-1, -1), Vector2i(0, -1),
 		Vector2i(-1, 0), Vector2i(0, 0),

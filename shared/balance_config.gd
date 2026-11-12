@@ -54,3 +54,6 @@ extends Resource
 @export var camera_distance: float = 5.4
 @export var camera_z_bias: float = 3.6
 @export var camera_smooth_rate: float = 9.0
+@export var camera_rotation_enabled: bool = true
+@export var camera_rotation_smooth_rate: float = 5.0
+@export var camera_look_ahead_dist: float = 1.4

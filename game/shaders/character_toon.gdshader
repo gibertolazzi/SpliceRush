@@ -12,6 +12,7 @@ uniform float emission_boost : hint_range(0.0, 3.0) = 0.05;
 // Warmth and saturation boost for skin & hands (Più colore)
 uniform float skin_warmth_boost : hint_range(0.0, 1.0) = 0.50;
 uniform vec3 skin_tint : source_color = vec3(1.15, 0.88, 0.76);
+uniform float purple_shift : hint_range(0.0, 1.0) = 0.0;
 
 void fragment() {
 	vec4 col = base_color;
@@ -27,6 +28,13 @@ void fragment() {
 			col.rgb = mix(col.rgb, col.rgb * skin_tint * vec3(1.12, 0.94, 0.82), skin_warmth_boost);
 			float luma = dot(col.rgb, vec3(0.299, 0.587, 0.114));
 			col.rgb = mix(vec3(luma), col.rgb, 1.35);
+		}
+
+		// Signature hero shirt: shift the blue fabric toward the key-art violet.
+		if (purple_shift > 0.001) {
+			float blue_dom = smoothstep(0.02, 0.16, col.b - max(col.r, col.g));
+			vec3 violet = vec3(col.r * 0.62 + 0.20, col.g * 0.50, col.b * 1.05);
+			col.rgb = mix(col.rgb, violet, blue_dom * purple_shift);
 		}
 	}
 
