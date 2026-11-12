@@ -38,6 +38,7 @@ var customize_fill_light: OmniLight3D
 var _custom_stage_time: float = 0.0
 
 var _joystick_vec: Vector2 = Vector2.ZERO
+var _last_raw_move_input: Vector2 = Vector2.ZERO
 var _ability_queued: bool = false
 var _attack_queued: bool = false
 var _frame_counter: int = 0
@@ -723,6 +724,7 @@ func _physics_process(_delta: float) -> void:
 		if hud != null and hud.intro_tutorial_timer > 1.2 and combined.length_squared() > 0.05:
 			hud.intro_tutorial_timer = minf(hud.intro_tutorial_timer, 0.8)
 
+	_last_raw_move_input = combined
 	var move_to_submit := combined
 	if balance.camera_rotation_enabled and combined.length_squared() > 0.001:
 		var cam_forward_2d := Vector2(-sin(current_cam_yaw), -cos(current_cam_yaw))
@@ -808,7 +810,7 @@ func _update_camera_follow(dt: float) -> void:
 			var to_killer: Vector2 = kill_cam_focus_xz - player_state.pos
 			if to_killer.length_squared() > 0.1:
 				target_cam_yaw = -to_killer.angle() - PI * 0.5
-		else:
+		elif not (_last_raw_move_input.y > 0.35 and absf(_last_raw_move_input.x) < 0.50):
 			target_cam_yaw = -player_state.facing_angle - PI * 0.5
 		var t_yaw: float = 1.0 - exp(-balance.camera_rotation_smooth_rate * dt)
 		current_cam_yaw = lerp_angle(current_cam_yaw, target_cam_yaw, t_yaw)

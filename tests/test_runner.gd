@@ -1114,9 +1114,9 @@ func test_ingame_character_visibility_and_walk_retargeting() -> bool:
 	# 2. Verify camera balance parameters are tuned for clear third-person brawler visibility
 	var balance_cfg: BalanceConfig = load("res://shared/default_balance.tres") as BalanceConfig
 	assert_true(balance_cfg != null, "balance_cfg_loaded")
-	# Key-art framing: high angle (about 50 degrees down) so limbs on the floor and the fight around the player read.
-	assert_true(balance_cfg.camera_distance >= 7.0 and balance_cfg.camera_distance <= 10.0, "camera_distance_shows_arena_around_player")
-	assert_true(balance_cfg.camera_pitch_deg <= -45.0 and balance_cfg.camera_pitch_deg >= -65.0, "camera_pitch_high_angle_like_key_art")
+	# User-tuned closer & lower angle (-36 deg) for better depth visibility
+	assert_true(balance_cfg.camera_distance >= 4.5 and balance_cfg.camera_distance <= 10.0, "camera_distance_shows_arena_around_player")
+	assert_true(balance_cfg.camera_pitch_deg <= -30.0 and balance_cfg.camera_pitch_deg >= -65.0, "camera_pitch_high_angle_like_key_art")
 	assert_true(balance_cfg.camera_z_bias >= 3.4, "camera_z_bias_positions_player_foreground")
 
 	# 3. Verify fighter 0 model scale and sockets
@@ -1134,6 +1134,14 @@ func test_ingame_character_visibility_and_walk_retargeting() -> bool:
 	fighter.anim_player.seek(0.2, true)
 	var walking_hips_origin: Vector3 = fighter.skeleton.get_bone_global_pose(hips_idx).origin
 	assert_true(base_hips_origin.is_equal_approx(walking_hips_origin), "hips_pose_anchored_during_walk")
+
+	# Verify walk animation actually advances during update_visual_state with MANUAL process mode
+	fighter.update_visual_state(Vector2.ZERO, Vector2(0.0, -4.0), -PI * 0.5, 0.0, 0.0, true, 0.016)
+	var pos_t0: float = fighter.anim_player.current_animation_position
+	for _w: int in range(10):
+		fighter.update_visual_state(Vector2.ZERO, Vector2(0.0, -4.0), -PI * 0.5, 0.0, 0.0, true, 0.033)
+	var pos_t1: float = fighter.anim_player.current_animation_position
+	assert_true(fighter.anim_player.current_animation == &"Walk" and pos_t1 != pos_t0, "walk_animation_advances_when_moving")
 
 	fighter.free()
 	return true
@@ -1212,6 +1220,13 @@ func test_camera_follow_rotation_and_enemy_visibility() -> bool:
 	# Enemy placed 3 units East of player (0.0 + 3.0, 0.0)
 	var enemy_pos_3d := Vector3(3.0, 1.0, 0.0)
 	assert_true(not arena_ctrl.camera.is_position_behind(enemy_pos_3d), "enemy_in_front_is_not_behind_camera")
+
+	# Verify walking backward (raw input Y > 0.35, X ~ 0) keeps camera yaw stable (no 180 flip)
+	var yaw_before_back: float = arena_ctrl.target_cam_yaw
+	arena_ctrl._last_raw_move_input = Vector2(0.0, 1.0)
+	p0.facing_angle = PI * 0.5 # Player turns toward camera while backing up
+	arena_ctrl._update_camera_follow(0.0166)
+	assert_true(is_equal_approx(arena_ctrl.target_cam_yaw, yaw_before_back), "camera_yaw_does_not_flip_when_walking_backward")
 
 	arena_ctrl.free()
 	return true

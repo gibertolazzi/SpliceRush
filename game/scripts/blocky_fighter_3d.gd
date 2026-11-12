@@ -1489,8 +1489,8 @@ func update_visual_state(
 			else:
 				if anim_player.is_playing():
 					anim_player.pause()
-			if anim_player.is_playing():
-				anim_player.advance(dt)
+		if anim_player.is_playing():
+			anim_player.advance(dt)
 
 	_reassert_collapsed_bones()
 
