@@ -16,6 +16,8 @@ const CHEST_TEX: Texture2D = preload("res://game/ui/assets/chest.svg")
 const CROWN_TEX: Texture2D = preload("res://game/ui/assets/crown.svg")
 
 const InGameSettingsModalScript := preload("res://game/ui/in_game_settings_modal.gd")
+const FriendsLobbyModalScript := preload("res://game/ui/friends_lobby_modal.gd")
+const HomeSubModalScript := preload("res://game/ui/home_modals.gd")
 const FONT_REGULAR := preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 const FONT_BOLD := preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 
@@ -59,6 +61,9 @@ var sound_controller: SoundController = null:
 			settings_modal.sound_controller = val
 
 var settings_modal: Control = null
+var friends_modal: FriendsLobbyModal = null
+var sub_modal: HomeSubModal = null
+var social: SocialManager = null
 
 var is_loading: bool = false
 var loading_progress: float = 0.0
@@ -83,6 +88,7 @@ var _task_btn_rect: Rect2 = Rect2()
 var _season_btn_rect: Rect2 = Rect2()
 var _mode_btn_rect: Rect2 = Rect2()
 var _drawer_close_rect: Rect2 = Rect2()
+var _lobby_leave_rect: Rect2 = Rect2()
 
 const COLOR_OPTIONS: Array[Dictionary] = [
 	{ "name": "Blu Reale", "color": Color.WHITE, "badge_col": Color(0.18, 0.44, 0.98) },
@@ -98,11 +104,51 @@ func _ready() -> void:
 	selected_part_id = equipped_slots.get(PartData.Slot.HEAD, &"base_head") as StringName
 	selected_color = equipped_color
 
+	social = SocialManager.new()
+	social.name = "SocialManager"
+	add_child(social)
+	_sync_from_social()
+	social.lobby_changed.connect(_sync_from_social)
+	social.tasks_changed.connect(_sync_from_social)
+
 	settings_modal = InGameSettingsModalScript.new()
 	settings_modal.name = "HomeSettingsModal"
 	settings_modal.sound_controller = sound_controller
 	settings_modal.visible = false
 	add_child(settings_modal)
+
+	friends_modal = FriendsLobbyModalScript.new()
+	friends_modal.name = "FriendsLobbyModal"
+	friends_modal.social = social
+	friends_modal.play_with_lobby_requested.connect(func() -> void:
+		_commit_preview_selection()
+		start_loading_flow()
+	)
+	add_child(friends_modal)
+
+	sub_modal = HomeSubModalScript.new()
+	sub_modal.name = "HomeSubModal"
+	sub_modal.social = social
+	sub_modal.cosmetic_equipped.connect(func(col: Color) -> void:
+		equipped_color = col
+		selected_color = col
+		color_selected.emit(col)
+	)
+	add_child(sub_modal)
+
+func _sync_from_social() -> void:
+	if social == null:
+		return
+	player_name = social.player_username
+	trophies = social.player_trophies
+	season_number = social.season_number
+	season_level = social.season_level
+	season_xp = social.season_xp
+	season_xp_max = social.season_xp_max
+	var claimable: int = social.get_claimable_task_count()
+	if claimable > 0:
+		season_badge_count = claimable
+	queue_redraw()
 
 func _process(delta: float) -> void:
 	_pulse_timer += delta * 4.0
@@ -120,6 +166,10 @@ func _input(event: InputEvent) -> void:
 	if not is_visible_in_tree() or is_loading:
 		return
 	if settings_modal != null and settings_modal.is_open:
+		return
+	if friends_modal != null and friends_modal.is_open:
+		return
+	if sub_modal != null and sub_modal.is_open:
 		return
 
 	if event is InputEventScreenTouch:
@@ -195,10 +245,27 @@ func _handle_press_at(pos: Vector2, pointer_idx: int) -> bool:
 		is_appearance_open = true
 		queue_redraw()
 		return true
-	if _shop_btn_rect.has_point(pos) or _friends_btn_rect.has_point(pos) or _task_btn_rect.has_point(pos) or _season_btn_rect.has_point(pos) or _mode_btn_rect.has_point(pos):
-		_toast_text = tr(&"HOME_COMING_SOON")
-		_toast_timer = 1.6
-		queue_redraw()
+	if _shop_btn_rect.has_point(pos):
+		if sub_modal != null:
+			sub_modal.open_shop(equipped_color)
+		return true
+	if _friends_btn_rect.has_point(pos):
+		if friends_modal != null:
+			friends_modal.open(FriendsLobbyModal.TAB_FRIENDS)
+		return true
+	if _task_btn_rect.has_point(pos) or _season_btn_rect.has_point(pos):
+		if sub_modal != null:
+			sub_modal.open_tasks()
+		return true
+	if _mode_btn_rect.has_point(pos):
+		if social != null:
+			social.selected_mode = "frenzy" if social.selected_mode == "survival" else "survival"
+			social.save_state()
+			queue_redraw()
+		return true
+	if _lobby_leave_rect.has_area() and _lobby_leave_rect.has_point(pos):
+		if social != null:
+			social.leave_or_kick_lobby("local_player")
 		return true
 	if pos.y >= 110.0 and pos.y <= 660.0:
 		_is_dragging = true
@@ -376,11 +443,31 @@ func _draw_home_screen(sz: Vector2) -> void:
 		draw_circle(badge_c, 13.0, Color(0.93, 0.11, 0.14))
 		_draw_outlined_text(FONT_BOLD, Vector2(badge_c.x - 13.0, badge_c.y + 6.0), str(season_badge_count), HORIZONTAL_ALIGNMENT_CENTER, 26.0, 17, Color.WHITE, 1.5)
 
-	# Mode selector bar ("Sopravvivenza")
+	# Mode selector bar ("Sopravvivenza" / "Frenzy Rapida")
 	_draw_brawl_box(_mode_btn_rect, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 14.0, 2.5)
 	if CROWN_TEX != null:
 		draw_texture_rect(CROWN_TEX, Rect2(_mode_btn_rect.position.x + 22.0, _mode_btn_rect.position.y + 21.0, 33.0, 27.0), false)
-	_draw_outlined_text(FONT_BOLD, Vector2(_mode_btn_rect.position.x + 70.0, _mode_btn_rect.position.y + 45.0), tr(&"HOME_MODE_SURVIVAL"), HORIZONTAL_ALIGNMENT_LEFT, 320.0, 29, Color.WHITE, 2.5)
+	var mode_key: StringName = &"HOME_MODE_FRENZY" if (social != null and social.selected_mode == "frenzy") else &"HOME_MODE_SURVIVAL"
+	_draw_outlined_text(FONT_BOLD, Vector2(_mode_btn_rect.position.x + 70.0, _mode_btn_rect.position.y + 45.0), tr(mode_key), HORIZONTAL_ALIGNMENT_LEFT, 320.0, 29, Color.WHITE, 2.5)
+
+	# Lobby Party Strip (shown when friends are in lobby or invited)
+	_lobby_leave_rect = Rect2()
+	if social != null and (social.lobby_members.size() > 1 or not social.pending_invites.is_empty()):
+		var bar_r := Rect2(124.0, 96.0, sz.x - 248.0, 48.0)
+		_draw_brawl_box(bar_r, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 12.0, 2.0)
+		var mem_names: PackedStringArray = PackedStringArray()
+		for m: Dictionary in social.lobby_members:
+			if not bool(m.get("is_host", false)):
+				mem_names.append(str(m.get("username", "")))
+		var lobby_txt: String = (tr(&"LOBBY_HEADER") % [social.lobby_members.size(), SocialManager.MAX_LOBBY_SIZE])
+		if not mem_names.is_empty():
+			lobby_txt = ", ".join(mem_names) + " (" + tr(&"LOBBY_READY") + ")"
+		elif not social.pending_invites.is_empty():
+			lobby_txt = tr(&"LOBBY_WAITING")
+		_draw_outlined_text(FONT_BOLD, Vector2(bar_r.position.x + 10.0, bar_r.position.y + 30.0), lobby_txt, HORIZONTAL_ALIGNMENT_LEFT, bar_r.size.x - 66.0, 15, Color(0.28, 0.92, 0.50), 1.5)
+		_lobby_leave_rect = Rect2(bar_r.end.x - 56.0, bar_r.position.y + 9.0, 48.0, 30.0)
+		_draw_brawl_box(_lobby_leave_rect, Color(0.85, 0.22, 0.26), Color(0.58, 0.12, 0.16), DARK_BORDER, 8.0, 1.5)
+		_draw_outlined_text(FONT_BOLD, Vector2(_lobby_leave_rect.position.x, _lobby_leave_rect.position.y + 20.0), tr(&"LOBBY_LEAVE"), HORIZONTAL_ALIGNMENT_CENTER, 48.0, 12, Color.WHITE, 1.5)
 
 	# Refresh / cycle arrows icon on right of mode bar
 	var cyc_c := Vector2(_mode_btn_rect.end.x - 40.0, _mode_btn_rect.position.y + _mode_btn_rect.size.y * 0.5)

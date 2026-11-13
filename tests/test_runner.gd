@@ -44,6 +44,7 @@ func _initialize() -> void:
 		"test_fighter_shows_club_grafts_and_sockets",
 		"test_dropped_pieces_render_real_limb_meshes",
 		"test_return_to_customize_menu_after_match",
+		"test_friends_search_recent_and_lobby_system",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -1817,4 +1818,69 @@ func test_return_to_customize_menu_after_match() -> bool:
 	assert_eq(arena_ctrl.fighter_nodes[1].visible, false, "bot_hidden_in_customize_menu")
 
 	arena_ctrl.free()
+	return true
+
+func test_friends_search_recent_and_lobby_system() -> bool:
+	var tmp_save := "user://test_social_save.json"
+	if FileAccess.file_exists(tmp_save):
+		DirAccess.remove_absolute(tmp_save)
+
+	var soc := SocialManager.new(tmp_save)
+	soc.persistence_enabled = true
+
+	# 1. Username search (case-insensitive)
+	var res_kira: Array[Dictionary] = soc.search_players("kira")
+	assert_true(res_kira.size() >= 1 and str(res_kira[0]["username"]) == "KiraVortex", "search_finds_kira_by_username")
+	var res_niko: Array[Dictionary] = soc.search_players("NIKO")
+	assert_true(res_niko.size() >= 1 and str(res_niko[0]["username"]) == "NikoTurbo", "search_finds_niko_case_insensitive")
+
+	# 2. Add & remove friend
+	assert_eq(soc.is_friend("u_niko"), false, "niko_not_friend_initially")
+	assert_eq(soc.add_friend("u_niko"), true, "add_niko_as_friend")
+	assert_eq(soc.is_friend("u_niko"), true, "niko_is_now_friend")
+	assert_eq(soc.remove_friend("u_niko"), true, "remove_niko_friend")
+	assert_eq(soc.is_friend("u_niko"), false, "niko_removed_from_friends")
+
+	# 3. Record recent opponents from a match
+	var fake_bot := { "id": 3, "display_name": "TurboRex", "is_bot": true, "base_color": Color(0.9, 0.3, 0.2) }
+	soc.record_match_opponents([fake_bot])
+	assert_eq(str(soc.recent_players[0]["username"]), "TurboRex", "recent_opponent_recorded_first")
+	assert_eq(bool(soc.recent_players[0]["is_bot"]), true, "recent_opponent_preserves_bot_flag")
+
+	# 4. Lobby invite -> tick -> accept -> kick/leave
+	assert_eq(soc.lobby_members.size(), 1, "lobby_starts_with_host_only")
+	assert_eq(soc.invite_to_lobby("u_kira", 0.5), true, "invite_kira_succeeds")
+	assert_eq(soc.get_lobby_status_for("u_kira"), "invited", "kira_status_is_invited")
+	soc.tick_invites(0.6)
+	assert_eq(soc.get_lobby_status_for("u_kira"), "in_lobby", "kira_joined_lobby_after_accept")
+	assert_eq(soc.lobby_members.size(), 2, "lobby_now_has_2_members")
+	assert_eq(soc.leave_or_kick_lobby("u_kira"), true, "kick_kira_from_lobby")
+	assert_eq(soc.lobby_members.size(), 1, "lobby_back_to_host_only")
+
+	# 5. Persistence round-trip
+	var xp_gained: int = soc.claim_task("t_abom_1")
+	assert_true(xp_gained > 0, "claim_completed_task_grants_xp")
+	var saved_xp: int = soc.season_xp
+	soc.free()
+
+	var soc2 := SocialManager.new(tmp_save)
+	assert_eq(soc2.load_state(), true, "social_save_loads_cleanly")
+	assert_eq(soc2.season_xp, saved_xp, "social_save_preserves_season_xp")
+	assert_eq(str(soc2.recent_players[0]["username"]), "TurboRex", "social_save_preserves_recent_players")
+	soc2.free()
+
+	# 6. FriendsLobbyModal UI open & search
+	var modal := FriendsLobbyModal.new()
+	root.add_child(modal)
+	var soc3 := SocialManager.new("")
+	soc3.persistence_enabled = false
+	modal.social = soc3
+	modal.open(FriendsLobbyModal.TAB_SEARCH)
+	modal.search_query = "sora"
+	var disp: Array[Dictionary] = modal._get_displayed_players()
+	assert_true(disp.size() == 1 and str(disp[0]["username"]) == "SoraDash", "friends_modal_search_filters_sora")
+	modal.close()
+	assert_eq(modal.is_open, false, "friends_modal_closes")
+	soc3.free()
+	modal.free()
 	return true

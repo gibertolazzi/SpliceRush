@@ -744,8 +744,26 @@ func _process(delta: float) -> void:
 
 	if is_customizing:
 		_custom_stage_time += delta
+		var lobby_companions: Array[Dictionary] = []
+		if customization_menu != null:
+			var soc: Variant = customization_menu.get("social")
+			if soc != null:
+				for lm: Dictionary in soc.lobby_members:
+					if not bool(lm.get("is_host", false)):
+						lobby_companions.append(lm)
+		var comp_offsets: Array[Vector3] = [
+			Vector3(-0.95, 0.0, -0.45),
+			Vector3(0.95, 0.0, -0.45),
+			Vector3(0.0, 0.0, -0.85),
+		]
 		for i: int in range(1, fighter_nodes.size()):
-			fighter_nodes[i].visible = false
+			var comp_idx: int = i - 1
+			if comp_idx < lobby_companions.size() and comp_idx < comp_offsets.size():
+				fighter_nodes[i].visible = true
+				fighter_nodes[i].position = comp_offsets[comp_idx]
+				fighter_nodes[i].rotation = Vector3(0.0, 0.25 if comp_idx == 0 else -0.25, 0.0)
+			else:
+				fighter_nodes[i].visible = false
 
 		if customize_light_shaft != null:
 			customize_light_shaft.rotation.y += delta * 0.35
@@ -1040,6 +1058,13 @@ func _on_server_combatant_eliminated(combatant_id: int, rank: int) -> void:
 		hud.on_player_eliminated(rank)
 
 func _on_server_match_ended(leaderboard: Array[Dictionary], player_rank: int) -> void:
+	if customization_menu != null:
+		var soc: Variant = customization_menu.get("social")
+		if soc != null and server != null:
+			soc.record_match_opponents(server.combatants)
+			if not server.combatants.is_empty():
+				var p0: MatchServer.CombatantState = server.combatants[0]
+				soc.record_match_result(p0.stolen_parts_count, p0.is_abomination)
 	if hud != null:
 		hud.on_match_ended(leaderboard, player_rank, balance.result_screen_duration_sec)
 
@@ -1133,6 +1158,17 @@ func _on_custom_play_pressed(slots: Dictionary, col: Color) -> void:
 	if virtual_joystick != null:
 		virtual_joystick.visible = true
 	server.bots_enabled = true
+	if customization_menu != null:
+		var soc: Variant = customization_menu.get("social")
+		if soc != null:
+			if soc.selected_mode == "frenzy":
+				server.start_new_match(55.0, true)
+			var comp_slot: int = 1
+			for lm: Dictionary in soc.lobby_members:
+				if not bool(lm.get("is_host", false)) and comp_slot < server.combatants.size():
+					server.combatants[comp_slot].display_name = str(lm.get("username", "Friend"))
+					server.combatants[comp_slot].base_color = Color(str(lm.get("color_hex", "#6B4EFF")))
+					comp_slot += 1
 	for fn: BlockyFighter3D in fighter_nodes:
 		fn.visible = true
 
