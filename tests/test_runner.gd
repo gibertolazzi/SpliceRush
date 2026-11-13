@@ -55,6 +55,9 @@ func _initialize() -> void:
 		"test_save_v1_migrates_to_v2_and_round_trips_economy",
 		"test_fighter_wears_skin_model_and_palette",
 		"test_part_gadgets_ride_the_bones",
+		"test_home_settings_show_account_not_match_controls",
+		"test_appearance_screen_equips_tries_on_and_routes_purchases",
+		"test_economy_budget_new_guest_and_wardrobe_growth",
 		"test_shop_and_pass_screens_scroll_claim_and_celebrate",
 	]
 	for t: String in test_methods:
@@ -741,10 +744,12 @@ func test_customization_hangar_stage_and_cards() -> bool:
 	# Switch to COLOR tab
 	menu._switch_tab(CustomizationMenu.TAB_COLOR)
 	assert_eq(menu.current_tab, CustomizationMenu.TAB_COLOR, "custom_menu_tab_color_active")
-	menu._select_option(Color(0.95, 0.28, 0.28))
-	assert_eq(menu.selected_color, Color(0.95, 0.28, 0.28), "custom_menu_color_selected")
+	var red := Color(str(EconomyCatalog.get_color("rosso")["hex"]))
+	menu._select_option(red)
+	assert_eq(menu.selected_color, red, "custom_menu_color_selected")
 	menu._commit_preview_selection()
-	assert_eq(menu.equipped_color, Color(0.95, 0.28, 0.28), "custom_menu_color_committed")
+	assert_eq(menu.equipped_color, red, "custom_menu_color_committed")
+	assert_eq(menu.social.equipped_color_id, "rosso", "committed_colour_saved_as_signature_colour")
 	menu.free()
 
 	# 5. Test 3D Hero Customization Stage in MainArenaController
@@ -1903,6 +1908,7 @@ func test_season_pass_dual_track_and_profile_stats() -> bool:
 
 	var soc := SocialManager.new(tmp_save)
 	soc.persistence_enabled = true
+	_make_veteran(soc)
 
 	# 1. Dual-track Season Pass: free unlocked up to 34, paid locked until Plus activated
 	assert_eq(soc.can_claim_pass_tier(33, false), true, "free_tier_33_claimable")
@@ -1955,7 +1961,16 @@ func test_season_pass_dual_track_and_profile_stats() -> bool:
 func _make_economy_profile() -> SocialManager:
 	var soc := SocialManager.new("")
 	soc.persistence_enabled = false
+	_make_veteran(soc)
 	return soc
+
+## A mid-season player (the old demo profile): level 34, a full wallet, two tiers claimed.
+## New guests start from zero; these tests need progress to work with.
+func _make_veteran(soc: SocialManager) -> void:
+	soc.season_level = 34
+	soc.season_xp = 435
+	soc.coins = 1204
+	soc.claimed_free_tiers = [31, 32]
 
 func test_wallet_buys_skins_and_refuses_what_it_cannot_afford() -> bool:
 	# Arrange
@@ -2163,7 +2178,7 @@ func test_match_rewards_feed_season_xp_and_result_screen() -> bool:
 	assert_eq(soc.coins, coins + int(rewards["coins"]), "match_coins_paid")
 	assert_eq(int(summary["level_before"]), 10, "summary_keeps_level_before")
 	assert_eq(soc.season_level, 11, "match_xp_levels_the_pass_up")
-	assert_eq(soc.season_xp, 800 + expected_xp - 900, "leftover_xp_carries_over")
+	assert_eq(soc.season_xp, 800 + expected_xp - EconomyCatalog.SEASON_XP_PER_LEVEL, "leftover_xp_carries_over")
 	assert_true(int(summary["claimable"]) > 0, "summary_counts_rewards_to_claim")
 	var last_place: Dictionary = MatchRewards.compute(balance_cfg, 12, 0, 0, false)
 	assert_eq(int(last_place["xp"]), balance_cfg.reward_xp_match, "last_place_still_earns_the_base_xp")
@@ -2176,8 +2191,8 @@ func test_match_rewards_feed_season_xp_and_result_screen() -> bool:
 	var p_start: float = hud.get_rewards_shown_progress()
 	hud._rewards_age = 10.0
 	var p_end: float = hud.get_rewards_shown_progress()
-	assert_true(is_equal_approx(p_start, 10.0 + 800.0 / 900.0), "result_bar_starts_where_the_pass_was")
-	assert_true(is_equal_approx(p_end, 11.0 + float(soc.season_xp) / 900.0), "result_bar_ends_where_the_pass_is")
+	assert_true(is_equal_approx(p_start, 10.0 + 800.0 / float(EconomyCatalog.SEASON_XP_PER_LEVEL)), "result_bar_starts_where_the_pass_was")
+	assert_true(is_equal_approx(p_end, 11.0 + float(soc.season_xp) / float(EconomyCatalog.SEASON_XP_PER_LEVEL)), "result_bar_ends_where_the_pass_is")
 	hud.on_match_restarted()
 	assert_eq(hud.match_rewards.is_empty(), true, "rewards_card_cleared_on_rematch")
 	hud.free()
@@ -2214,6 +2229,7 @@ func test_save_v1_migrates_to_v2_and_round_trips_economy() -> bool:
 	var a := SocialManager.new(tmp_save)
 	a.persistence_enabled = true
 	a.now_provider = func() -> float: return 20000.0 * 86400.0
+	a.coins = 1000
 	a.buy_skin("stella")
 	a.equip_skin("stella")
 	a.claim_free_offer("free_coins")
@@ -2307,6 +2323,222 @@ func test_part_gadgets_ride_the_bones() -> bool:
 	fighter.free()
 	return true
 
+func test_home_settings_show_account_not_match_controls() -> bool:
+	# Arrange: the home card (no match running) with a guest profile.
+	var soc := SocialManager.new("")
+	soc.persistence_enabled = false
+	var acc := AccountService.new(soc)
+	var modal := InGameSettingsModal.new()
+	modal.in_match = false
+	modal.social = soc
+	modal.account = acc
+	modal.size = Vector2(540.0, 960.0)
+	root.add_child(modal)
+
+	# Act
+	modal.open()
+
+	# Assert: no "leave match", no live-match warning; account linking offered instead.
+	assert_eq(modal._leave_match_btn_rect.has_area(), false, "home_settings_have_no_leave_button")
+	assert_true(modal._google_btn_rect.has_area() and modal._apple_btn_rect.has_area(), "home_settings_offer_google_and_apple")
+	assert_true(soc.guest_id.begins_with("G-"), "guest_gets_a_stable_id")
+
+	# Act: link with no backend wired.
+	modal.handle_tap(modal._google_btn_rect.get_center())
+
+	# Assert: an honest "coming soon" note, nothing linked.
+	assert_eq(modal.sub_dialog, InGameSettingsModal.SUB_ACCOUNT, "unconfigured_backend_explains_itself")
+	assert_eq(soc.linked_provider, "", "nothing_linked_without_a_backend")
+	modal.handle_tap(modal._subdialog_close_rect.get_center())
+	assert_eq(modal.sub_dialog, InGameSettingsModal.SUB_NONE, "note_closes")
+
+	# Act: a working backend links the guest.
+	acc.backend = FakeAccountBackend.new()
+	modal.handle_tap(modal._apple_btn_rect.get_center())
+
+	# Assert
+	assert_eq(soc.linked_provider, "apple", "backend_links_the_guest")
+	assert_eq(acc.is_linked(), true, "service_reports_linked")
+	assert_true(modal._unlink_btn_rect.has_area(), "linked_card_offers_unlink")
+	var restored := SocialManager.new("")
+	restored.apply_state(soc.capture_state())
+	assert_eq(restored.linked_provider, "apple", "linked_account_survives_a_restart")
+	assert_eq(restored.guest_id, soc.guest_id, "guest_id_survives_a_restart")
+	acc.unlink()
+	assert_eq(soc.linked_provider, "", "unlink_clears_the_link")
+
+	# Screen shake is a real toggle (accessibility).
+	var before: bool = InGameSettingsModal.screen_shake_on
+	modal.handle_tap(modal._shake_rect.get_center())
+	assert_eq(InGameSettingsModal.screen_shake_on, not before, "shake_toggle_flips")
+	InGameSettingsModal.screen_shake_on = before
+
+	# The in-match card keeps Leave / Resume and hides the account.
+	modal.close()
+	modal.in_match = true
+	modal.open()
+	assert_true(modal._leave_match_btn_rect.has_area(), "match_settings_keep_leave")
+	assert_eq(modal._google_btn_rect.has_area(), false, "match_settings_hide_account")
+	modal.free()
+	restored.free()
+	soc.free()
+	return true
+
+func test_appearance_screen_equips_tries_on_and_routes_purchases() -> bool:
+	# Arrange
+	var soc: SocialManager = _make_economy_profile()
+	var look := AppearanceScreen.new()
+	look.social = soc
+	look.size = Vector2(540.0, 960.0)
+	root.add_child(look)
+	var previews: Array[String] = []
+	var buys: Array[String] = []
+	var pass_opens: Array[int] = [0]
+	var parts: Array[StringName] = []
+	look.skin_preview_changed.connect(func(id: String) -> void: previews.append(id))
+	look.buy_requested.connect(func(id: String, _daily: bool) -> void: buys.append(id))
+	look.open_pass_requested.connect(func() -> void: pass_opens[0] += 1)
+	look.part_equipped.connect(func(_slot: int, pid: StringName) -> void: parts.append(pid))
+	look.open()
+
+	# Skins are grouped by character: every skin in exactly one family.
+	var seen: int = 0
+	for fam: Dictionary in EconomyCatalog.get_skin_families():
+		seen += (fam["skins"] as Array).size()
+	assert_eq(seen, EconomyCatalog.SKINS.size(), "every_skin_sits_in_one_family")
+	assert_eq(EconomyCatalog.get_skin_families().size(), 4, "four_characters_with_styles")
+
+	# Act: tap a shop skin you do not own -> try it on, the button offers to buy it.
+	look.activate("skin", "stella")
+	assert_eq(look.get_display_skin_id(), "stella", "locked_skin_is_tried_on")
+	assert_eq(previews.back(), "stella", "hero_asked_to_wear_the_try_on")
+	assert_eq(soc.equipped_skin, EconomyCatalog.DEFAULT_SKIN_ID, "try_on_does_not_equip")
+	assert_eq(look.get_cta_kind(), "buy", "try_on_offers_to_buy")
+	look.activate_cta()
+	assert_eq(buys, ["stella"] as Array[String], "buy_goes_to_the_shop_confirm")
+
+	# The purchase lands (through the shop): the tried-on skin becomes yours and is worn.
+	soc.buy_skin("stella")
+	look.refresh_after_inventory_change()
+	assert_eq(soc.equipped_skin, "stella", "bought_try_on_is_equipped")
+	assert_eq(look.tryon_skin_id, "", "try_on_cleared_after_buying")
+
+	# A pass-only skin points to the pass.
+	look.activate("skin", "oro")
+	assert_eq(look.get_cta_kind(), "pass", "pass_skin_points_to_the_pass")
+	look.activate_cta()
+	assert_eq(pass_opens[0], 1, "pass_opened_from_the_try_on")
+
+	# Owned skins equip on tap and end any try-on.
+	look.activate("skin", EconomyCatalog.DEFAULT_SKIN_ID)
+	assert_eq(soc.equipped_skin, EconomyCatalog.DEFAULT_SKIN_ID, "owned_skin_equips_on_tap")
+	assert_eq(look.get_cta_kind(), "play", "no_try_on_means_play")
+
+	# Parts: pick a slot, pick a part, it is saved.
+	look.switch_tab(AppearanceScreen.TAB_PARTS)
+	look.activate("slot", str(PartData.Slot.ARMS))
+	look.activate("part", "chainsaw_arm")
+	assert_eq(soc.loadout[PartData.Slot.ARMS], &"chainsaw_arm", "part_choice_saved")
+	assert_eq(parts, [&"chainsaw_arm"] as Array[StringName], "part_change_reaches_the_hero")
+
+	# Colours: a locked one is tried on, an unlocked one is equipped.
+	look.switch_tab(AppearanceScreen.TAB_COLORS)
+	look.activate("color", "verde")
+	assert_true(EconomyCatalog.colors_match(look.get_display_color(), Color("#40E680")), "locked_colour_tried_on")
+	assert_eq(look.get_cta_kind(), "pass", "locked_colour_points_to_the_pass")
+	look.activate("color", "rosso")
+	assert_eq(soc.equipped_color_id, "rosso", "unlocked_colour_equipped")
+	assert_eq(look.tryon_color_id, "", "equipping_ends_the_colour_try_on")
+
+	# Leaving puts the equipped look back.
+	look.activate("skin", "cromo")
+	look.close()
+	assert_eq(previews.back(), "", "closing_reverts_the_try_on")
+	assert_eq(look.get_display_skin_id(), soc.equipped_skin, "display_skin_is_the_equipped_one_again")
+
+	# The fighter's ground ring wears the signature colour, across skin changes.
+	var fighter := BlockyFighter3D.new()
+	root.add_child(fighter)
+	fighter.setup_fighter(0, false, Color(0.5, 0.12, 0.88), 0, {}, false)
+	fighter.set_signature_color(Color("#40E680"))
+	fighter.apply_skin(EconomyCatalog.get_skin("lava"))
+	var ring_mat: StandardMaterial3D = (fighter.player_cursor_ring as MeshInstance3D).material_override as StandardMaterial3D
+	assert_true(ring_mat.albedo_color.is_equal_approx(Color("#40E680")), "ground_ring_keeps_the_signature_colour")
+	fighter.free()
+	look.free()
+	soc.free()
+	return true
+
+func test_economy_budget_new_guest_and_wardrobe_growth() -> bool:
+	# A brand-new guest starts from zero with a small wallet.
+	var guest := SocialManager.new("")
+	guest.persistence_enabled = false
+	assert_eq(guest.coins, EconomyCatalog.STARTING_COINS, "guest_starts_with_the_starting_wallet")
+	assert_eq(guest.season_level, 1, "guest_starts_at_pass_level_1")
+	assert_eq(guest.season_xp, 0, "guest_starts_with_no_xp")
+	assert_eq(guest.claimed_free_tiers.size(), 0, "guest_has_nothing_claimed")
+	for cid: String in EconomyCatalog.DEFAULT_COLOR_IDS:
+		assert_true(guest.is_color_id_unlocked(cid), "default_colour_unlocked_%s" % cid)
+
+	# First purchase within reach of a first session, not handed out for free.
+	var cheapest: int = 1 << 30
+	var shop_total: int = 0
+	for skin: Dictionary in EconomyCatalog.get_shop_skins():
+		cheapest = mini(cheapest, int(skin["price"]))
+		shop_total += int(skin["price"])
+	assert_true(EconomyCatalog.STARTING_COINS < cheapest, "starting_wallet_cannot_buy_a_skin_yet")
+	var balance_cfg: BalanceConfig = load("res://shared/default_balance.tres") as BalanceConfig
+	var avg_coins: int = int(MatchRewards.compute(balance_cfg, 6, 2, 2, false)["coins"])
+	var matches_to_first_skin: int = int(ceil(float(cheapest - EconomyCatalog.STARTING_COINS - 10) / float(avg_coins)))
+	assert_true(matches_to_first_skin <= 25, "first_skin_within_about_a_day_of_play")
+
+	# Season model (docs/decisions/0002): 6 weeks, a dedicated free player plays 8 matches a day.
+	var days: int = 42
+	var dedicated_income: int = 8 * days * avg_coins + EconomyCatalog.get_track_coin_total(false) + days * 10
+	assert_true(dedicated_income < shop_total, "a_free_player_cannot_buy_the_whole_shop_in_one_season")
+	assert_true(dedicated_income > shop_total / 2, "a_dedicated_free_player_still_buys_half_the_shop")
+	var casual_income: int = 3 * days * avg_coins + EconomyCatalog.get_track_coin_total(false) / 2 + days * 5
+	assert_true(casual_income >= cheapest * 2, "a_casual_player_gets_at_least_two_skins")
+
+	# Pass length: the dedicated player finishes in 3-6 weeks, never in the first fortnight.
+	var avg_xp: int = int(MatchRewards.compute(balance_cfg, 6, 2, 2, false)["xp"])
+	var mission_xp: int = 0
+	for t: Dictionary in guest.tasks:
+		mission_xp += int(t.get("xp", 0))
+	var need: int = (EconomyCatalog.SEASON_TIER_COUNT - 1) * EconomyCatalog.SEASON_XP_PER_LEVEL
+	var dedicated_days: float = float(need) / float(8 * avg_xp + mission_xp + 50)
+	assert_true(dedicated_days >= 18.0 and dedicated_days <= 42.0, "dedicated_player_finishes_the_pass_within_the_season")
+
+	# Wardrobe growth stays readable: a capped launch roster and a per-season budget.
+	assert_true(EconomyCatalog.SKINS.size() <= EconomyCatalog.LAUNCH_SKIN_COUNT_MAX, "launch_roster_capped")
+	var per_season: Dictionary = {}
+	for skin: Dictionary in EconomyCatalog.SKINS:
+		var season: int = int(skin.get("season", -1))
+		assert_true(season >= 0, "every_skin_has_a_season_%s" % skin["id"])
+		per_season[season] = int(per_season.get(season, 0)) + 1
+	for season: Variant in per_season.keys():
+		if int(season) > 0:
+			assert_true(int(per_season[season]) <= EconomyCatalog.NEW_SKINS_PER_SEASON_MAX, "season_%d_within_budget" % int(season))
+
+	# Every colour that is not free is earned in the pass.
+	for c: Dictionary in EconomyCatalog.COLORS:
+		if not EconomyCatalog.DEFAULT_COLOR_IDS.has(str(c["id"])):
+			assert_true(not EconomyCatalog.find_color_source(str(c["id"])).is_empty(), "colour_%s_is_earned_in_the_pass" % c["id"])
+
+	# Look choices survive a restart.
+	guest.unlock_color(Color("#40E680"))
+	guest.equip_color("verde")
+	guest.set_loadout_part(PartData.Slot.LEGS, &"rocket_legs")
+	var back := SocialManager.new("")
+	back.apply_state(guest.capture_state())
+	assert_eq(back.equipped_color_id, "verde", "signature_colour_survives_a_restart")
+	assert_eq(back.loadout[PartData.Slot.LEGS], &"rocket_legs", "starting_parts_survive_a_restart")
+	assert_eq(back.apply_state({ "version": 2, "equipped_color_id": "magenta" }), true, "odd_colour_save_loads")
+	assert_eq(back.equipped_color_id, "bianco", "locked_colour_in_a_save_falls_back")
+	back.free()
+	guest.free()
+	return true
+
 func test_shop_and_pass_screens_scroll_claim_and_celebrate() -> bool:
 	# Arrange
 	var soc: SocialManager = _make_economy_profile()
@@ -2395,19 +2627,31 @@ func test_shop_and_pass_screens_scroll_claim_and_celebrate() -> bool:
 	soc.season_xp = 100
 	soc.grant_match_rewards({ "xp": 1000, "coins": 0, "lines": [] })
 	pass_modal.open(SeasonPassModal.TAB_REWARDS)
-	assert_true(is_equal_approx(pass_modal._shown_progress, 12.0 + 100.0 / 900.0), "pass_bar_starts_from_before_the_match")
+	assert_true(is_equal_approx(pass_modal._shown_progress, 12.0 + 100.0 / float(EconomyCatalog.SEASON_XP_PER_LEVEL)), "pass_bar_starts_from_before_the_match")
 	pass_modal._update_screen(0.2)
-	assert_true(pass_modal._shown_progress > 12.0 + 100.0 / 900.0, "pass_bar_fills_toward_the_new_xp")
+	assert_true(pass_modal._shown_progress > 12.0 + 100.0 / float(EconomyCatalog.SEASON_XP_PER_LEVEL), "pass_bar_fills_toward_the_new_xp")
 	for _i: int in range(200):
 		pass_modal._update_screen(0.05)
-	assert_true(is_equal_approx(pass_modal._shown_progress, 13.0 + 200.0 / 900.0), "pass_bar_settles_on_the_real_progress")
+	assert_true(is_equal_approx(pass_modal._shown_progress, 13.0 + float(1100 - EconomyCatalog.SEASON_XP_PER_LEVEL) / float(EconomyCatalog.SEASON_XP_PER_LEVEL)), "pass_bar_settles_on_the_real_progress")
 	assert_eq(pass_modal._level_up_level, 13, "level_up_celebrated_during_the_fill")
 	pass_modal.close()
 	pass_modal.open(SeasonPassModal.TAB_REWARDS)
-	assert_true(is_equal_approx(pass_modal._shown_progress, 13.0 + 200.0 / 900.0), "xp_animation_plays_only_once")
+	assert_true(is_equal_approx(pass_modal._shown_progress, 13.0 + float(1100 - EconomyCatalog.SEASON_XP_PER_LEVEL) / float(EconomyCatalog.SEASON_XP_PER_LEVEL)), "xp_animation_plays_only_once")
 	pass_modal.close()
 
 	pass_modal.free()
 	shop.free()
 	soc.free()
 	return true
+
+
+## Stands in for a real account backend (e.g. Firebase) that links on the spot.
+class FakeAccountBackend extends AccountBackend:
+	func is_configured() -> bool:
+		return true
+
+	func supports(_provider_id: String) -> bool:
+		return true
+
+	func start_link(provider_id: String, _guest_id: String) -> void:
+		link_finished.emit({ "ok": true, "provider": provider_id, "display": "tester@example.test", "reason": "" })
