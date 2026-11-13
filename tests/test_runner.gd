@@ -45,6 +45,7 @@ func _initialize() -> void:
 		"test_dropped_pieces_render_real_limb_meshes",
 		"test_return_to_customize_menu_after_match",
 		"test_friends_search_recent_and_lobby_system",
+		"test_season_pass_dual_track_and_profile_stats",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -1883,4 +1884,55 @@ func test_friends_search_recent_and_lobby_system() -> bool:
 	assert_eq(modal.is_open, false, "friends_modal_closes")
 	soc3.free()
 	modal.free()
+	return true
+
+func test_season_pass_dual_track_and_profile_stats() -> bool:
+	var tmp_save := "user://test_pass_profile_save.json"
+	if FileAccess.file_exists(tmp_save):
+		DirAccess.remove_absolute(tmp_save)
+
+	var soc := SocialManager.new(tmp_save)
+	soc.persistence_enabled = true
+
+	# 1. Dual-track Season Pass: free unlocked up to 34, paid locked until Plus activated
+	assert_eq(soc.can_claim_pass_tier(33, false), true, "free_tier_33_claimable")
+	assert_eq(soc.can_claim_pass_tier(35, false), false, "free_tier_35_locked_at_lvl_34")
+	assert_eq(soc.can_claim_pass_tier(33, true), false, "paid_tier_33_locked_without_plus")
+	soc.activate_premium_pass()
+	assert_eq(soc.can_claim_pass_tier(33, true), true, "paid_tier_33_claimable_after_plus")
+	assert_eq(soc.claim_pass_tier(33, true), true, "claim_paid_tier_33_succeeds")
+	assert_eq(soc.is_pass_tier_claimed(33, true), true, "paid_tier_33_marked_claimed")
+
+	# 2. Match stats & mission XP level-up unlocks tier 35
+	var prev_kills: int = soc.total_kills
+	var prev_trophies: int = soc.player_trophies
+	soc.record_match_result(4, true, 1, 3)
+	assert_eq(soc.total_kills, prev_kills + 3, "profile_total_kills_incremented")
+	assert_eq(soc.player_trophies, prev_trophies + 30, "profile_trophies_awarded_on_win")
+	soc.claim_task("t_play_1")
+	soc.claim_task("t_steal_3")
+	soc.claim_task("t_abom_1")
+	assert_true(soc.season_level >= 35, "claiming_missions_levels_up_season_pass")
+	assert_eq(soc.can_claim_pass_tier(35, false), true, "free_tier_35_unlocked_after_levelup")
+
+	# 3. Modals open/close cleanly
+	var pass_modal := SeasonPassModal.new()
+	pass_modal.social = soc
+	root.add_child(pass_modal)
+	pass_modal.open(SeasonPassModal.TAB_REWARDS)
+	assert_eq(pass_modal.is_open, true, "season_pass_modal_opens")
+	pass_modal.close()
+	assert_eq(pass_modal.is_open, false, "season_pass_modal_closes")
+
+	var prof_modal := ProfileModal.new()
+	prof_modal.social = soc
+	root.add_child(prof_modal)
+	prof_modal.open(Color.WHITE)
+	assert_eq(prof_modal.is_open, true, "profile_modal_opens")
+	prof_modal.close()
+	assert_eq(prof_modal.is_open, false, "profile_modal_closes")
+
+	pass_modal.free()
+	prof_modal.free()
+	soc.free()
 	return true

@@ -6,6 +6,8 @@ signal recent_players_changed()
 signal lobby_changed()
 signal tasks_changed()
 signal shop_changed()
+signal pass_changed()
+signal profile_changed()
 
 const SAVE_VERSION: int = 1
 const DEFAULT_SAVE_PATH: String = "user://social_save.json"
@@ -15,12 +17,34 @@ var save_path: String = DEFAULT_SAVE_PATH
 var persistence_enabled: bool = true
 
 var player_username: String = "Pinguino"
+var player_tag: String = "#SPL1C3P"
 var player_trophies: int = 2805
+var best_trophies: int = 2940
+var wins_survival: int = 42
+var matches_played: int = 87
+var total_kills: int = 314
+var parts_stolen: int = 628
+var abomination_count: int = 19
+
 var season_number: int = 1
 var season_level: int = 34
 var season_xp: int = 435
 var season_xp_max: int = 900
+var has_premium_pass: bool = false
+var claimed_free_tiers: Array[int] = [31, 32]
+var claimed_paid_tiers: Array[int] = []
 var selected_mode: String = "survival" # "survival" | "frenzy"
+
+const SEASON_TIERS: Array[Dictionary] = [
+	{ "tier": 31, "free_it": "Cassa Base", "free_en": "Basic Chest", "free_col": "#559FDC", "paid_it": "Tinta Ciano", "paid_en": "Cyan Tint", "paid_col": "#2DE2E6" },
+	{ "tier": 32, "free_it": "Emblema Corona", "free_en": "Crown Badge", "free_col": "#FFB020", "paid_it": "Scia Neon", "paid_en": "Neon Trail", "paid_col": "#FF2E93" },
+	{ "tier": 33, "free_it": "Cassa Rara", "free_en": "Rare Chest", "free_col": "#8B5CF6", "paid_it": "Skin Viola", "paid_en": "Violet Skin", "paid_col": "#6B4EFF" },
+	{ "tier": 34, "free_it": "Gettoni x150", "free_en": "Tokens x150", "free_col": "#2EE67A", "paid_it": "Corona Plus", "paid_en": "Plus Crown", "paid_col": "#F5C418" },
+	{ "tier": 35, "free_it": "Cassa Epica", "free_en": "Epic Chest", "free_col": "#FF2E93", "paid_it": "Aura Laser", "paid_en": "Laser Aura", "paid_col": "#FF4747" },
+	{ "tier": 36, "free_it": "Tinta Verde", "free_en": "Toxic Green", "free_col": "#2EE67A", "paid_it": "Cassa Ultra", "paid_en": "Ultra Chest", "paid_col": "#F5C418" },
+	{ "tier": 37, "free_it": "Emblema Fulmine", "free_en": "Bolt Badge", "free_col": "#2DE2E6", "paid_it": "Tinta Oro", "paid_en": "Gold Tint", "paid_col": "#FFB020" },
+	{ "tier": 38, "free_it": "Mega Cassa", "free_en": "Mega Chest", "free_col": "#F5C418", "paid_it": "Skin Abominio", "paid_en": "Abom Skin", "paid_col": "#FF2E93" },
+]
 
 var friends: Array[Dictionary] = []
 var recent_players: Array[Dictionary] = []
@@ -282,9 +306,60 @@ func get_claimable_task_count() -> int:
 	for t: Dictionary in tasks:
 		if not bool(t.get("claimed", false)) and int(t.get("progress", 0)) >= int(t.get("target", 1)):
 			count += 1
+	for tr_d: Dictionary in SEASON_TIERS:
+		var tier_n: int = int(tr_d["tier"])
+		if can_claim_pass_tier(tier_n, false):
+			count += 1
+		if has_premium_pass and can_claim_pass_tier(tier_n, true):
+			count += 1
 	return count
 
-func record_match_result(stolen_count: int, became_abomination: bool) -> void:
+func can_claim_pass_tier(tier_num: int, is_paid: bool) -> bool:
+	if tier_num > season_level:
+		return false
+	if is_paid:
+		return has_premium_pass and not claimed_paid_tiers.has(tier_num)
+	return not claimed_free_tiers.has(tier_num)
+
+func is_pass_tier_claimed(tier_num: int, is_paid: bool) -> bool:
+	return claimed_paid_tiers.has(tier_num) if is_paid else claimed_free_tiers.has(tier_num)
+
+func claim_pass_tier(tier_num: int, is_paid: bool) -> bool:
+	if not can_claim_pass_tier(tier_num, is_paid):
+		return false
+	if is_paid:
+		claimed_paid_tiers.append(tier_num)
+	else:
+		claimed_free_tiers.append(tier_num)
+	pass_changed.emit()
+	tasks_changed.emit()
+	save_state()
+	return true
+
+func activate_premium_pass() -> void:
+	if has_premium_pass:
+		return
+	has_premium_pass = true
+	pass_changed.emit()
+	tasks_changed.emit()
+	save_state()
+
+func record_match_result(stolen_count: int, became_abomination: bool, rank: int = 1, kills: int = 0) -> void:
+	matches_played += 1
+	total_kills += maxi(0, kills)
+	parts_stolen += maxi(0, stolen_count)
+	if became_abomination:
+		abomination_count += 1
+	if rank <= 3:
+		wins_survival += 1
+		player_trophies += 30
+	elif rank <= 6:
+		player_trophies += 12
+	else:
+		player_trophies = maxi(0, player_trophies - 5)
+	if player_trophies > best_trophies:
+		best_trophies = player_trophies
+
 	for t: Dictionary in tasks:
 		var tid: String = str(t.get("id", ""))
 		var target: int = int(t.get("target", 1))
@@ -294,8 +369,28 @@ func record_match_result(stolen_count: int, became_abomination: bool) -> void:
 			t["progress"] = mini(target, int(t.get("progress", 0)) + maxi(0, stolen_count))
 		elif tid == "t_abom_1" and became_abomination:
 			t["progress"] = target
+		elif tid == "t_kills_5":
+			t["progress"] = mini(target, int(t.get("progress", 0)) + maxi(0, kills))
+	profile_changed.emit()
 	tasks_changed.emit()
 	save_state()
+
+func reroll_task(task_id: String) -> bool:
+	for i: int in range(tasks.size()):
+		if str(tasks[i].get("id", "")) == task_id and not bool(tasks[i].get("claimed", false)):
+			tasks[i] = {
+				"id": "t_kills_5",
+				"title_it": "Elimina 5 avversari",
+				"title_en": "Defeat 5 opponents",
+				"progress": 0,
+				"target": 5,
+				"xp": 350,
+				"claimed": false,
+			}
+			tasks_changed.emit()
+			save_state()
+			return true
+	return false
 
 func claim_task(task_id: String) -> int:
 	for t: Dictionary in tasks:
@@ -336,10 +431,20 @@ func capture_state() -> Dictionary:
 	return {
 		"version": SAVE_VERSION,
 		"player_username": player_username,
+		"player_tag": player_tag,
 		"player_trophies": player_trophies,
+		"best_trophies": best_trophies,
+		"wins_survival": wins_survival,
+		"matches_played": matches_played,
+		"total_kills": total_kills,
+		"parts_stolen": parts_stolen,
+		"abomination_count": abomination_count,
 		"season_number": season_number,
 		"season_level": season_level,
 		"season_xp": season_xp,
+		"has_premium_pass": has_premium_pass,
+		"claimed_free_tiers": claimed_free_tiers.duplicate(),
+		"claimed_paid_tiers": claimed_paid_tiers.duplicate(),
 		"selected_mode": selected_mode,
 		"friends": friends.duplicate(true),
 		"recent_players": recent_players.duplicate(true),
@@ -352,10 +457,26 @@ func apply_state(data: Dictionary) -> bool:
 	if ver <= 0 or ver > SAVE_VERSION:
 		return false
 	player_username = str(data.get("player_username", player_username))
+	player_tag = str(data.get("player_tag", player_tag))
 	player_trophies = int(data.get("player_trophies", player_trophies))
+	best_trophies = int(data.get("best_trophies", best_trophies))
+	wins_survival = int(data.get("wins_survival", wins_survival))
+	matches_played = int(data.get("matches_played", matches_played))
+	total_kills = int(data.get("total_kills", total_kills))
+	parts_stolen = int(data.get("parts_stolen", parts_stolen))
+	abomination_count = int(data.get("abomination_count", abomination_count))
 	season_number = int(data.get("season_number", season_number))
 	season_level = int(data.get("season_level", season_level))
 	season_xp = int(data.get("season_xp", season_xp))
+	has_premium_pass = bool(data.get("has_premium_pass", has_premium_pass))
+	if data.get("claimed_free_tiers") is Array:
+		claimed_free_tiers.clear()
+		for v: Variant in data["claimed_free_tiers"]:
+			claimed_free_tiers.append(int(v))
+	if data.get("claimed_paid_tiers") is Array:
+		claimed_paid_tiers.clear()
+		for v: Variant in data["claimed_paid_tiers"]:
+			claimed_paid_tiers.append(int(v))
 	selected_mode = str(data.get("selected_mode", selected_mode))
 	if data.get("friends") is Array:
 		friends.clear()

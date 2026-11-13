@@ -18,6 +18,8 @@ const CROWN_TEX: Texture2D = preload("res://game/ui/assets/crown.svg")
 const InGameSettingsModalScript := preload("res://game/ui/in_game_settings_modal.gd")
 const FriendsLobbyModalScript := preload("res://game/ui/friends_lobby_modal.gd")
 const HomeSubModalScript := preload("res://game/ui/home_modals.gd")
+const SeasonPassModalScript := preload("res://game/ui/season_pass_modal.gd")
+const ProfileModalScript := preload("res://game/ui/profile_modal.gd")
 const FONT_REGULAR := preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 const FONT_BOLD := preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 
@@ -63,6 +65,8 @@ var sound_controller: SoundController = null:
 var settings_modal: Control = null
 var friends_modal: FriendsLobbyModal = null
 var sub_modal: HomeSubModal = null
+var season_pass_modal: SeasonPassModal = null
+var profile_modal: ProfileModal = null
 var social: SocialManager = null
 
 var is_loading: bool = false
@@ -80,6 +84,7 @@ var _tab_rects: Array[Rect2] = []
 var _option_rects: Array[Dictionary] = [] # { rect: Rect2, data: Variant }
 var _equip_btn_rect: Rect2 = Rect2()
 var _play_btn_rect: Rect2 = Rect2()
+var _profile_rect: Rect2 = Rect2()
 var _hamburger_rect: Rect2 = Rect2()
 var _shop_btn_rect: Rect2 = Rect2()
 var _skin_btn_rect: Rect2 = Rect2()
@@ -110,6 +115,8 @@ func _ready() -> void:
 	_sync_from_social()
 	social.lobby_changed.connect(_sync_from_social)
 	social.tasks_changed.connect(_sync_from_social)
+	social.pass_changed.connect(_sync_from_social)
+	social.profile_changed.connect(_sync_from_social)
 
 	settings_modal = InGameSettingsModalScript.new()
 	settings_modal.name = "HomeSettingsModal"
@@ -135,6 +142,16 @@ func _ready() -> void:
 		color_selected.emit(col)
 	)
 	add_child(sub_modal)
+
+	season_pass_modal = SeasonPassModalScript.new()
+	season_pass_modal.name = "SeasonPassModal"
+	season_pass_modal.social = social
+	add_child(season_pass_modal)
+
+	profile_modal = ProfileModalScript.new()
+	profile_modal.name = "ProfileModal"
+	profile_modal.social = social
+	add_child(profile_modal)
 
 func _sync_from_social() -> void:
 	if social == null:
@@ -170,6 +187,10 @@ func _input(event: InputEvent) -> void:
 	if friends_modal != null and friends_modal.is_open:
 		return
 	if sub_modal != null and sub_modal.is_open:
+		return
+	if season_pass_modal != null and season_pass_modal.is_open:
+		return
+	if profile_modal != null and profile_modal.is_open:
 		return
 
 	if event is InputEventScreenTouch:
@@ -233,6 +254,10 @@ func _handle_press_at(pos: Vector2, pointer_idx: int) -> bool:
 		return false
 
 	# Home screen interactions
+	if _profile_rect.has_point(pos):
+		if profile_modal != null:
+			profile_modal.open(equipped_color)
+		return true
 	if _hamburger_rect.has_point(pos):
 		if settings_modal != null:
 			settings_modal.open()
@@ -253,9 +278,13 @@ func _handle_press_at(pos: Vector2, pointer_idx: int) -> bool:
 		if friends_modal != null:
 			friends_modal.open(FriendsLobbyModal.TAB_FRIENDS)
 		return true
-	if _task_btn_rect.has_point(pos) or _season_btn_rect.has_point(pos):
-		if sub_modal != null:
-			sub_modal.open_tasks()
+	if _task_btn_rect.has_point(pos):
+		if season_pass_modal != null:
+			season_pass_modal.open(SeasonPassModal.TAB_MISSIONS)
+		return true
+	if _season_btn_rect.has_point(pos):
+		if season_pass_modal != null:
+			season_pass_modal.open(SeasonPassModal.TAB_REWARDS)
 		return true
 	if _mode_btn_rect.has_point(pos):
 		if social != null:
@@ -334,6 +363,7 @@ func _draw_home_screen(sz: Vector2) -> void:
 
 	var prof_w: float = _hamburger_rect.position.x - margin_x - 16.0
 	var prof_rect := Rect2(margin_x, top_y, prof_w, ham_h)
+	_profile_rect = prof_rect
 	_draw_brawl_box(prof_rect, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 14.0, 2.5)
 
 	# Avatar portrait box

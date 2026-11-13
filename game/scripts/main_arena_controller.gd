@@ -1064,7 +1064,7 @@ func _on_server_match_ended(leaderboard: Array[Dictionary], player_rank: int) ->
 			soc.record_match_opponents(server.combatants)
 			if not server.combatants.is_empty():
 				var p0: MatchServer.CombatantState = server.combatants[0]
-				soc.record_match_result(p0.stolen_parts_count, p0.is_abomination)
+				soc.record_match_result(p0.stolen_parts_count, p0.is_abomination, player_rank, p0.kills)
 	if hud != null:
 		hud.on_match_ended(leaderboard, player_rank, balance.result_screen_duration_sec)
 
