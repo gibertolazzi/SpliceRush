@@ -180,6 +180,8 @@ func _move_pointer(pos: Vector2, relative: Vector2) -> void:
 	if not _dragging_scroll and _moved > TAP_SLOP_PX and scroll_area.has_point(_press_pos):
 		_dragging_scroll = true
 		_scroll_target = -1.0
+	if not _dragging_scroll and _moved > TAP_SLOP_PX and not scroll_area.has_point(_press_pos):
+		_on_outside_drag(relative)
 	if _dragging_scroll:
 		var limit: float = max_scroll()
 		var resist: float = 0.4 if (scroll_y < 0.0 or scroll_y > limit) else 1.0
@@ -227,6 +229,10 @@ func _draw_overlay(_ci: CanvasItem) -> void:
 	pass
 
 func _on_tap(_pos: Vector2) -> void:
+	pass
+
+## A drag that started outside the scroll area (e.g. spinning the 3D hero above a panel).
+func _on_outside_drag(_relative: Vector2) -> void:
 	pass
 
 ## Return true while a popup is up and the page must not scroll.

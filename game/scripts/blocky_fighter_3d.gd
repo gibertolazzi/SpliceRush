@@ -52,6 +52,9 @@ var right_leg_socket: Node3D
 var core_socket: Node3D
 
 var player_cursor_ring: Node3D
+## Signature colour picked in Aspetto: tints the player's own ground ring.
+var signature_color: Color = Color.WHITE
+var _signature_mat: StandardMaterial3D
 var rocket_flame: MeshInstance3D
 var bot_indicator_root: Node3D
 var abomination_marker_root: Node3D
@@ -182,6 +185,18 @@ func get_limb_tint_color() -> Color:
 	if fighter_id == 0 and float(skin_palette.get("tint", 0.0)) > 0.0:
 		return skin_palette.get("primary", base_color) as Color
 	return base_color
+
+func _get_signature_mat() -> StandardMaterial3D:
+	if _signature_mat == null:
+		_signature_mat = StandardMaterial3D.new()
+		_signature_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_signature_mat.albedo_color = signature_color
+	return _signature_mat
+
+## Recolours the ground ring; kept across skin changes and rebuilds.
+func set_signature_color(col: Color) -> void:
+	signature_color = col
+	_get_signature_mat()
 
 static func model_type_for_skin_model(model_name: String) -> CharacterModelType:
 	match model_name:
@@ -636,13 +651,13 @@ func _build_base_skeleton() -> void:
 		var cursor_mi := MeshInstance3D.new()
 		cursor_mi.name = "PlayerGroundRing"
 		var cursor_torus := TorusMesh.new()
-		cursor_torus.inner_radius = 0.92
-		cursor_torus.outer_radius = 0.98
+		cursor_torus.inner_radius = 0.90
+		cursor_torus.outer_radius = 1.0
 		cursor_torus.rings = 28
 		cursor_torus.ring_segments = 4
 		cursor_mi.mesh = cursor_torus
 		cursor_mi.position = Vector3(0.0, 0.05, 0.0)
-		cursor_mi.material_override = _shared_white_mat
+		cursor_mi.material_override = _get_signature_mat()
 		add_child(cursor_mi)
 		player_cursor_ring = cursor_mi
 

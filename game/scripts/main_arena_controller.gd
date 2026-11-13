@@ -7,6 +7,10 @@ var server: MatchServer
 var arena_builder: ArenaBuilder3D
 var sound_controller: SoundController
 const CustomizationMenuScript := preload("res://game/ui/customization_menu.gd")
+const CUSTOM_CAM_HOME_POS := Vector3(0.0, 1.78, 4.35)
+const CUSTOM_CAM_HOME_PITCH: float = -14.5
+const CUSTOM_CAM_LOOK_POS := Vector3(0.0, 3.5, 6.4)
+const CUSTOM_CAM_LOOK_PITCH: float = -36.0
 const STREAKS_SHADER := preload("res://StatusFXFree/assets/BinbunVFX_Vol2/StatusFX/shader/streaks.gdshader")
 
 var camera: Camera3D
@@ -422,8 +426,8 @@ func _setup_camera() -> void:
 	current_cam_yaw = 0.0
 	target_cam_yaw = 0.0
 	if is_customizing:
-		camera.position = Vector3(0.0, 1.78, 4.35)
-		camera.rotation_degrees = Vector3(-14.5, 0.0, 0.0)
+		camera.position = CUSTOM_CAM_HOME_POS
+		camera.rotation_degrees = Vector3(CUSTOM_CAM_HOME_PITCH, 0.0, 0.0)
 	else:
 		var start_z: float = 14.0 + balance.camera_z_bias
 		camera.position = Vector3(0.0, balance.camera_distance, start_z)
@@ -646,7 +650,13 @@ func _setup_ui() -> void:
 		if _screenshot_path != "":
 			menu_social.persistence_enabled = false
 		menu_social.inventory_changed.connect(_apply_player_skin)
+	customization_menu.skin_preview_changed.connect(func(_skin_id: String) -> void:
+		_apply_player_skin(true)
+	)
 	_apply_player_skin(false)
+	# The starting parts picked in Aspetto are saved: dress the hero in them on boot.
+	if is_customizing and not fighter_nodes.is_empty():
+		fighter_nodes[0].apply_slots(customization_menu.equipped_slots, false, true)
 	_stage_menu_preview()
 
 	virtual_joystick = TouchJoystick.new()
@@ -782,6 +792,13 @@ func _process(delta: float) -> void:
 			else:
 				fighter_nodes[i].visible = false
 
+		# Aspetto covers the lower half: pull the camera back so the whole hero fits above it.
+		if not _camera_transitioning and camera != null and customization_menu != null:
+			var look: AppearanceScreen = customization_menu.get("appearance_screen") as AppearanceScreen
+			var look_open: bool = look != null and look.is_open
+			var cam_t: float = 1.0 - exp(-8.0 * delta)
+			camera.position = camera.position.lerp(CUSTOM_CAM_LOOK_POS if look_open else CUSTOM_CAM_HOME_POS, cam_t)
+			camera.rotation_degrees.x = lerpf(camera.rotation_degrees.x, CUSTOM_CAM_LOOK_PITCH if look_open else CUSTOM_CAM_HOME_PITCH, cam_t)
 		if customize_light_shaft != null:
 			customize_light_shaft.rotation.y += delta * 0.35
 		for cube_data: Dictionary in customize_floating_cubes:
@@ -868,7 +885,7 @@ func _update_camera_follow(dt: float) -> void:
 	var base_cam_pos: Vector3 = camera.position.lerp(desired_cam_pos, t_pos)
 
 	var shake_off := Vector3.ZERO
-	if camera_shake_trauma > 0.0 and (hud == null or hud.screen_shake_enabled):
+	if camera_shake_trauma > 0.0 and (hud == null or hud.screen_shake_enabled) and InGameSettingsModal.screen_shake_on:
 		camera_shake_trauma = maxf(0.0, camera_shake_trauma - 2.8 * dt)
 		var amt: float = camera_shake_trauma * camera_shake_trauma * 0.28
 		var cam_right_dir := Vector3(cos(current_cam_yaw), 0.0, -sin(current_cam_yaw))
@@ -1161,6 +1178,21 @@ func _stage_menu_preview() -> void:
 			pass_modal.open(SeasonPassModal.TAB_MISSIONS if _preview_menu == "missions" else SeasonPassModal.TAB_REWARDS)
 			if _preview_scroll >= 0.0:
 				pass_modal.scroll_to(_preview_scroll, false)
+		"appearance", "appearance-parts", "appearance-colors", "appearance-tryon":
+			var look: AppearanceScreen = customization_menu.get("appearance_screen") as AppearanceScreen
+			var tab: int = AppearanceScreen.TAB_SKINS
+			if _preview_menu == "appearance-parts":
+				tab = AppearanceScreen.TAB_PARTS
+			elif _preview_menu == "appearance-colors":
+				tab = AppearanceScreen.TAB_COLORS
+			look.open(tab)
+			if _preview_menu == "appearance-tryon":
+				look.activate("skin", "cromo")
+			if _preview_scroll >= 0.0:
+				look.scroll_to(_preview_scroll, false)
+		"settings":
+			var settings: InGameSettingsModal = customization_menu.get("settings_modal") as InGameSettingsModal
+			settings.open()
 
 ## Dresses the player's fighter in the skin equipped in the shop or the Season Pass.
 func _apply_player_skin(animate: bool = true) -> void:
@@ -1169,8 +1201,9 @@ func _apply_player_skin(animate: bool = true) -> void:
 	var soc: Variant = customization_menu.get("social")
 	if soc == null:
 		return
-	var skin: Dictionary = EconomyCatalog.get_skin(str(soc.equipped_skin))
+	var skin: Dictionary = EconomyCatalog.get_skin(customization_menu.get_display_skin_id())
 	var fn: BlockyFighter3D = fighter_nodes[0]
+	fn.set_signature_color(customization_menu.get_display_color())
 	if fn.skin_id == str(skin["id"]):
 		return
 	fn.apply_skin(skin)
@@ -1193,12 +1226,8 @@ func _on_custom_color_selected(col: Color) -> void:
 	if fighter_nodes.is_empty():
 		return
 	var fn: BlockyFighter3D = fighter_nodes[0]
-	if fn.char_mesh != null:
-		var mat: Material = fn.char_mesh.get_surface_override_material(0)
-		if mat is ShaderMaterial:
-			mat.set_shader_parameter("base_color", col)
-		elif mat is StandardMaterial3D:
-			mat.albedo_color = col
+	# The signature colour lives on the ground ring and the arrow, not on the skin.
+	fn.set_signature_color(col)
 	fn.trigger_transform_pop()
 	if sound_controller != null:
 		sound_controller.play_equip_sfx()
@@ -1244,12 +1273,7 @@ func _on_custom_play_pressed(slots: Dictionary, col: Color) -> void:
 		server._recalc_combatant_stats(p0, true)
 	if not fighter_nodes.is_empty():
 		fighter_nodes[0].apply_slots(slots, false, true)
-		if fighter_nodes[0].char_mesh != null:
-			var mat: Material = fighter_nodes[0].char_mesh.get_surface_override_material(0)
-			if mat is ShaderMaterial:
-				mat.set_shader_parameter("base_color", col)
-			elif mat is StandardMaterial3D:
-				mat.albedo_color = col
+		fighter_nodes[0].set_signature_color(col)
 
 	# Smooth camera sweep to arena battle view
 	var safe_b: Vector2 = server.get_safe_bounds_xz()
@@ -1298,8 +1322,8 @@ func _on_hud_customize_requested() -> void:
 	current_cam_yaw = 0.0
 	target_cam_yaw = 0.0
 	camera.fov = balance.camera_fov_deg
-	camera.position = Vector3(0.0, 1.78, 4.35)
-	camera.rotation_degrees = Vector3(-14.5, 0.0, 0.0)
+	camera.position = CUSTOM_CAM_HOME_POS
+	camera.rotation_degrees = Vector3(CUSTOM_CAM_HOME_PITCH, 0.0, 0.0)
 	if not fighter_nodes.is_empty():
 		fighter_nodes[0].visible = true
 		fighter_nodes[0].position = Vector3.ZERO
