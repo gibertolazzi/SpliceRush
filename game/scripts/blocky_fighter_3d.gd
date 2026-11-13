@@ -78,6 +78,10 @@ var _transform_flash_timer: float = 0.0
 # --- Dismemberment visuals: stump sockets, grafted limbs and the limb held as a club ---
 const LIMB_KEYS: Array[StringName] = [&"arm_l", &"arm_r", &"leg_l", &"leg_r"]
 const SHATTER_VFX_SCALE: float = 0.42
+const HAND_GADGET_SCALE: float = 0.60
+const FOOT_GADGET_SCALE: float = 0.62
+const CORE_GADGET_SCALE: float = 0.70
+const CHEST_FRONT_Z: float = 0.17 # Spine joint to the front of the shirt, in fighter units
 const SKIN_DARK_CLOTH_LUMA: float = 0.22 # Darker original cloth takes the skin's secondary colour
 const MIXAMO_OVERLAY_OFFSET: float = 0.00012
 const CLUB_SWING_SEC: float = 0.30
@@ -103,6 +107,10 @@ var _club_side: float = 1.0
 var _bonk_squash_timer: float = 0.0
 var _collapsed_bones: Dictionary = {} # bone index -> collapsed pose scale
 var skin_id: String = ""
+# Part gadgets ride the real bones on the collection rigs (see _attach_sockets_to_bones).
+var _sockets_follow_bones: bool = false
+var _rocket_flames: Array[Node3D] = []
+var _head_metrics: Dictionary = {} # {"h", "face_z", "w"} in fighter units
 var skin_palette: Dictionary = {} # {"tint", "primary", "secondary", "glow"} from EconomyCatalog
 var _overlay_meshes: Array[MeshInstance3D] = []
 
@@ -573,6 +581,8 @@ func _build_base_skeleton() -> void:
 	pivot.name = "Pivot"
 	add_child(pivot)
 	limb_extra_roots.clear()
+	_rocket_flames.clear()
+	_sockets_follow_bones = false
 	_overlay_meshes.clear()
 	_collapsed_bones.clear()
 	_graft_nodes.clear()
@@ -1011,6 +1021,91 @@ func _setup_limb_rig() -> void:
 			_hand_attach_l.name = "HandAttachL"
 			skeleton.add_child(_hand_attach_l)
 			_hand_attach_l.bone_idx = _bone_left_hand
+	_attach_sockets_to_bones()
+
+func _make_bone_attachment(bone_idx: int, attach_name: String) -> BoneAttachment3D:
+	var attach := BoneAttachment3D.new()
+	attach.name = attach_name
+	skeleton.add_child(attach)
+	attach.bone_idx = bone_idx
+	return attach
+
+## Frame under a bone attachment with fighter axes (+Y up, +Z forward) and fighter units,
+## as the bone sits in the rest pose. Gadgets built in it then follow the bone's animation.
+func _fighter_aligned_frame(bone_idx: int) -> Transform3D:
+	var bone_basis: Basis = skeleton.get_bone_global_rest(bone_idx).basis.orthonormalized()
+	var unit: float = 1.0 / maxf(_skel_to_pivot.basis.get_scale().x, 0.0001)
+	return Transform3D((bone_basis.inverse() * _skel_to_pivot_rot.inverse()).scaled(Vector3.ONE * unit), Vector3.ZERO)
+
+## Frame under a bone attachment that keeps the bone's own axes (+Y along the bone), in fighter units.
+func _bone_aligned_frame() -> Transform3D:
+	var unit: float = 1.0 / maxf(_skel_to_pivot.basis.get_scale().x, 0.0001)
+	return Transform3D(Basis.IDENTITY.scaled(Vector3.ONE * unit), Vector3.ZERO)
+
+func _move_socket(socket: Node3D, new_parent: Node3D, frame: Transform3D) -> void:
+	if socket.get_parent() != null:
+		socket.get_parent().remove_child(socket)
+	new_parent.add_child(socket)
+	socket.transform = frame
+
+## On the collection rigs the part sockets leave their fixed spots beside the body and ride the
+## head, hands, ankles and chest bones, so equipped gadgets move with the walk and the swings.
+func _attach_sockets_to_bones() -> void:
+	_sockets_follow_bones = false
+	if skeleton == null or not _is_mixamo_collection_model():
+		return
+	var bone_spine: int = skeleton.find_bone("mixamorig_Spine2")
+	if _bone_head < 0 or bone_spine < 0 or _hand_attach_l == null or _hand_attach_r == null or _bone_left_foot < 0 or _bone_right_foot < 0:
+		return
+	_move_socket(head_socket, _make_bone_attachment(_bone_head, "HeadAttach"), _fighter_aligned_frame(_bone_head))
+	_move_socket(core_socket, _make_bone_attachment(bone_spine, "ChestAttach"), _fighter_aligned_frame(bone_spine))
+	_move_socket(left_arm_socket, _hand_attach_l, _bone_aligned_frame())
+	_move_socket(right_arm_socket, _hand_attach_r, _bone_aligned_frame())
+	_move_socket(left_leg_socket, _make_bone_attachment(_bone_left_foot, "FootAttachL"), _fighter_aligned_frame(_bone_left_foot))
+	_move_socket(right_leg_socket, _make_bone_attachment(_bone_right_foot, "FootAttachR"), _fighter_aligned_frame(_bone_right_foot))
+	_sockets_follow_bones = true
+
+	# Head size from the model itself, so visors sit on the face of every character.
+	var model_scale: float = hero_instance.scale.x if hero_instance != null else 1.0
+	var limb_set: Dictionary = LimbMeshLibrary.get_limb_set(get_model_scene())
+	_head_metrics = { "h": 0.56, "face_z": 0.22, "w": 0.46 }
+	if limb_set.has(LimbMeshLibrary.Limb.HEAD):
+		var head_box: AABB = ((limb_set[LimbMeshLibrary.Limb.HEAD] as Dictionary)["mesh"] as ArrayMesh).get_aabb()
+		_head_metrics["h"] = clampf(head_box.end.y * model_scale, 0.44, 0.60)
+		_head_metrics["face_z"] = clampf(head_box.end.z * model_scale, 0.18, 0.25)
+		_head_metrics["w"] = clampf(head_box.size.x * model_scale, 0.40, 0.50)
+
+func _gadget_material(col: Color, glow: float) -> Material:
+	return _make_toon_mat(col, glow)
+
+## Scaled holder inside a bone socket. Gadgets are authored a little oversized and brought
+## down here, so one number per body area tunes how chunky the parts read.
+func _gadget_holder(socket: Node3D, gadget_scale: float) -> Node3D:
+	var holder := Node3D.new()
+	holder.name = "Gadget"
+	holder.scale = Vector3.ONE * gadget_scale
+	socket.add_child(holder)
+	return holder
+
+func _drop_empty_holder(holder: Node3D) -> void:
+	if holder.get_child_count() == 0:
+		holder.free()
+
+func _set_arm_bones(left_visible: bool, right_visible: bool) -> void:
+	var l: Vector3 = Vector3.ONE if left_visible else Vector3(0.001, 0.001, 0.001)
+	var r: Vector3 = Vector3.ONE if right_visible else Vector3(0.001, 0.001, 0.001)
+	for b: int in [_bone_left_arm, _bone_left_forearm, _bone_left_hand]:
+		_set_bone_scale(b, l)
+	for b: int in [_bone_right_arm, _bone_right_forearm, _bone_right_hand]:
+		_set_bone_scale(b, r)
+
+func _set_leg_bones(left_visible: bool, right_visible: bool) -> void:
+	var l: Vector3 = Vector3.ONE if left_visible else Vector3(0.001, 0.001, 0.001)
+	var r: Vector3 = Vector3.ONE if right_visible else Vector3(0.001, 0.001, 0.001)
+	for b: int in [_bone_left_upleg, _bone_left_leg, _bone_left_foot]:
+		_set_bone_scale(b, l)
+	for b: int in [_bone_right_upleg, _bone_right_leg, _bone_right_foot]:
+		_set_bone_scale(b, r)
 
 func _limb_root_bone(key: StringName) -> int:
 	match key:
@@ -1231,6 +1326,11 @@ func _get_target_base_scale() -> float:
 
 func _populate_head_socket(part_id: StringName) -> void:
 	_clear_socket(head_socket)
+	if _sockets_follow_bones:
+		var head_holder: Node3D = _gadget_holder(head_socket, 1.0)
+		PartGadgets.build_head(part_id, head_holder, _gadget_material, float(_head_metrics.get("h", 0.56)), float(_head_metrics.get("face_z", 0.22)), float(_head_metrics.get("w", 0.46)))
+		_drop_empty_holder(head_holder)
+		return
 	if face_eyes_root != null:
 		face_eyes_root.visible = true
 
@@ -1311,6 +1411,17 @@ func _build_expressive_face() -> void:
 func _populate_arm_sockets(part_id: StringName) -> void:
 	_clear_socket(left_arm_socket)
 	_clear_socket(right_arm_socket)
+	if _sockets_follow_bones:
+		# Arms go left first, then right. Whatever arm is left wears the part's gadget on its hand.
+		var has_left: bool = part_id != &"severed_one_arm" and part_id != &"severed_arms"
+		var has_right: bool = part_id != &"severed_arms"
+		_set_arm_bones(has_left, has_right)
+		for arm: Array in [[has_left, left_arm_socket, false], [has_right, right_arm_socket, true]]:
+			if bool(arm[0]):
+				var hand_holder: Node3D = _gadget_holder(arm[1] as Node3D, HAND_GADGET_SCALE)
+				PartGadgets.build_hand(part_id, hand_holder, bool(arm[2]), _gadget_material)
+				_drop_empty_holder(hand_holder)
+		return
 
 	match part_id:
 		&"severed_one_arm":
@@ -1390,6 +1501,20 @@ func _populate_leg_sockets(part_id: StringName) -> void:
 	_clear_socket(left_leg_socket)
 	_clear_socket(right_leg_socket)
 	rocket_flame = null
+	_rocket_flames.clear()
+	if _sockets_follow_bones:
+		# Legs go right first, then left. Each remaining ankle wears the part's gadget.
+		var has_right_leg: bool = part_id != &"severed_one_leg" and part_id != &"severed_legs"
+		var has_left_leg: bool = part_id != &"severed_legs"
+		_set_leg_bones(has_left_leg, has_right_leg)
+		for leg: Array in [[has_left_leg, left_leg_socket], [has_right_leg, right_leg_socket]]:
+			if bool(leg[0]):
+				var foot_holder: Node3D = _gadget_holder(leg[1] as Node3D, FOOT_GADGET_SCALE)
+				var flame: Node3D = PartGadgets.build_foot(part_id, foot_holder, _gadget_material)
+				if flame != null:
+					_rocket_flames.append(flame)
+				_drop_empty_holder(foot_holder)
+		return
 
 	match part_id:
 		&"severed_one_leg":
@@ -1449,6 +1574,11 @@ func _populate_leg_sockets(part_id: StringName) -> void:
 
 func _populate_core_socket(part_id: StringName) -> void:
 	_clear_socket(core_socket)
+	if _sockets_follow_bones:
+		var core_holder: Node3D = _gadget_holder(core_socket, CORE_GADGET_SCALE)
+		PartGadgets.build_core(part_id, core_holder, _gadget_material, CHEST_FRONT_Z / CORE_GADGET_SCALE)
+		_drop_empty_holder(core_holder)
+		return
 
 	match part_id:
 		&"shield_core":
@@ -1544,8 +1674,10 @@ func update_visual_state(
 	if held_limb_node != null and is_instance_valid(held_limb_node):
 		pivot.rotation_degrees.x = _update_club_pose(attack_timer, dt)
 
-	# Drive attack swing on right arm socket
-	if attack_timer > 0.0:
+	# Drive attack swing on right arm socket (fixed sockets only: bone sockets swing with the arm)
+	if _sockets_follow_bones:
+		pass
+	elif attack_timer > 0.0:
 		right_arm_socket.rotation_degrees.x = -65.0
 	else:
 		var rest_pitch: float = 35.0 if current_slots.get(PartData.Slot.ARMS, &"") == &"chainsaw_arm" else 0.0
@@ -1587,6 +1719,14 @@ func update_visual_state(
 		var g_amp: float = 0.75 if (g_key == &"leg_l" or g_key == &"leg_r") else 0.55
 		var g_target: float = sin(_walk_phase * 1.6 + g_phase) * g_amp if is_moving else 0.0
 		g_node.rotation.x = lerpf(g_node.rotation.x, g_target, minf(1.0, 18.0 * dt))
+
+	# Rocket boosters fire while running.
+	for flame_node: Node3D in _rocket_flames:
+		if is_instance_valid(flame_node):
+			flame_node.visible = is_moving
+			if is_moving:
+				var f_pulse: float = 0.85 + 0.30 * sin(float(Time.get_ticks_msec()) * 0.03 + flame_node.get_instance_id() % 7)
+				flame_node.scale = Vector3(f_pulse, 0.85 + 0.5 * f_pulse, f_pulse)
 
 	if rocket_flame != null:
 		if is_moving and not has_severed_legs and not has_severed_one_leg:

@@ -54,6 +54,7 @@ func _initialize() -> void:
 		"test_match_rewards_feed_season_xp_and_result_screen",
 		"test_save_v1_migrates_to_v2_and_round_trips_economy",
 		"test_fighter_wears_skin_model_and_palette",
+		"test_part_gadgets_ride_the_bones",
 		"test_shop_and_pass_screens_scroll_claim_and_celebrate",
 	]
 	for t: String in test_methods:
@@ -2272,6 +2273,37 @@ func test_fighter_wears_skin_model_and_palette() -> bool:
 	# Assert
 	assert_eq(int(fighter.character_model_type), int(BlockyFighter3D.CharacterModelType.MAN_CUTIE), "default_skin_restores_the_model")
 	assert_true(is_equal_approx(fighter.get_limb_tint_amount(), 0.0), "default_skin_keeps_original_colours")
+	fighter.free()
+	return true
+
+func test_part_gadgets_ride_the_bones() -> bool:
+	# Arrange: a collection rig with one gadget in every slot.
+	var fighter := BlockyFighter3D.new()
+	root.add_child(fighter)
+	var loadout: Dictionary = { 0: &"visor_head", 1: &"chainsaw_arm", 2: &"rocket_legs", 3: &"crown_core" }
+
+	# Act
+	fighter.setup_fighter(0, false, Color(0.5, 0.12, 0.88), 0, loadout, false)
+
+	# Assert: sockets live under bone attachments and carry real meshes.
+	assert_true(fighter._sockets_follow_bones, "collection_rig_uses_bone_sockets")
+	assert_true(fighter.head_socket.get_parent() is BoneAttachment3D, "head_socket_rides_the_head_bone")
+	assert_true(fighter.core_socket.get_parent() is BoneAttachment3D, "core_socket_rides_the_chest_bone")
+	assert_eq(fighter.right_arm_socket.get_parent(), fighter._hand_attach_r, "chainsaw_rides_the_right_hand")
+	assert_true(fighter.right_leg_socket.get_parent() is BoneAttachment3D, "leg_socket_rides_the_foot_bone")
+	for socket: Node3D in [fighter.head_socket, fighter.right_arm_socket, fighter.left_leg_socket, fighter.core_socket]:
+		assert_true(socket.find_children("*", "MeshInstance3D", true, false).size() > 0, "gadget_meshes_in_%s" % socket.name)
+	assert_eq(fighter._rocket_flames.size(), 2, "both_rocket_legs_have_a_flame")
+	var saw_meshes: int = fighter.right_arm_socket.find_children("*", "MeshInstance3D", true, false).size()
+	var band_meshes: int = fighter.left_arm_socket.find_children("*", "MeshInstance3D", true, false).size()
+	assert_true(saw_meshes > band_meshes, "the_saw_goes_on_the_right_hand_only")
+
+	# Act: a skin change rebuilds the rig.
+	fighter.apply_skin(EconomyCatalog.get_skin("lava"))
+
+	# Assert: the gadgets come back on the new rig's bones.
+	assert_true(fighter.head_socket.get_parent() is BoneAttachment3D, "gadgets_survive_the_skin_change")
+	assert_true(fighter.head_socket.find_children("*", "MeshInstance3D", true, false).size() > 0, "visor_rebuilt_after_skin_change")
 	fighter.free()
 	return true
 
