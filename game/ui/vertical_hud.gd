@@ -58,8 +58,8 @@ var intro_tutorial_timer: float = 6.0
 var _intro_elapsed: float = 0.0
 var _abom_banner_timer: float = 0.0
 
-var font_bold: Font = preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
-var font_regular: Font = preload("res://game/ui/fonts/LondrinaSolid-Regular.ttf")
+var font_bold: Font = preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
+var font_regular: Font = preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 var logo_texture: Texture2D = preload("res://game/ui/assets/logo.svg")
 
 const TIMER_SVG: Texture2D = preload("res://game/ui/assets/timer.svg")

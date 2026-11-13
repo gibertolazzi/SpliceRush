@@ -16,8 +16,8 @@ var sub_dialog: int = 0 # 0: None, 1: Privacy Policy, 2: Terms of Service
 var is_open: bool = false
 var _pulse_timer: float = 0.0
 
-var font_bold: Font = preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
-var font_regular: Font = preload("res://game/ui/fonts/LondrinaSolid-Regular.ttf")
+var font_bold: Font = preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
+var font_regular: Font = preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 
 var _card_rect := Rect2()
 var _close_btn_rect := Rect2()

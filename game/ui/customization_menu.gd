@@ -16,8 +16,8 @@ const CHEST_TEX: Texture2D = preload("res://game/ui/assets/chest.svg")
 const CROWN_TEX: Texture2D = preload("res://game/ui/assets/crown.svg")
 
 const InGameSettingsModalScript := preload("res://game/ui/in_game_settings_modal.gd")
-const FONT_REGULAR := preload("res://game/ui/fonts/LondrinaSolid-Regular.ttf")
-const FONT_BOLD := preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
+const FONT_REGULAR := preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
+const FONT_BOLD := preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 
 const TAB_HEAD: int = 0
 const TAB_ARMS: int = 1

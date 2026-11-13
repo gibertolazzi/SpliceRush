@@ -263,7 +263,7 @@ func on_arena_ring_collapsed(collapsed_cells: Array[Vector2i], safe_bounds_xz: V
 ## Set by the arena controller; without it drops use a neutral mannequin.
 var drop_owner_resolver: Callable
 
-const COMIC_FONT: Font = preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
+const COMIC_FONT: Font = preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 const DROP_POP_SEC: float = 0.46
 const DROP_POP_HEIGHT: float = 1.25
 const DROP_BLINK_WINDOW_SEC: float = 3.0

@@ -22,7 +22,7 @@ var attack_max_cooldown: float = 0.45
 var dash_cooldown_timer: float = 0.0
 var dash_max_cooldown: float = 2.5
 
-var font_bold: Font = preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
+var font_bold: Font = preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
