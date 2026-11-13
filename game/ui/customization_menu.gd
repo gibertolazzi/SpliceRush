@@ -17,9 +17,10 @@ const CROWN_TEX: Texture2D = preload("res://game/ui/assets/crown.svg")
 
 const InGameSettingsModalScript := preload("res://game/ui/in_game_settings_modal.gd")
 const FriendsLobbyModalScript := preload("res://game/ui/friends_lobby_modal.gd")
-const HomeSubModalScript := preload("res://game/ui/home_modals.gd")
 const SeasonPassModalScript := preload("res://game/ui/season_pass_modal.gd")
 const ProfileModalScript := preload("res://game/ui/profile_modal.gd")
+const ShopScreenScript := preload("res://game/ui/shop_screen.gd")
+const SkinPreviewRendererScript := preload("res://game/ui/skin_preview_renderer.gd")
 const FONT_REGULAR := preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 const FONT_BOLD := preload("res://game/ui/fonts/LilitaOne-Regular.ttf")
 
@@ -61,13 +62,21 @@ var sound_controller: SoundController = null:
 		sound_controller = val
 		if settings_modal != null:
 			settings_modal.sound_controller = val
+		if shop_screen != null:
+			shop_screen.sound = val
+		if season_pass_modal != null:
+			season_pass_modal.sound = val
 
 var settings_modal: Control = null
 var friends_modal: FriendsLobbyModal = null
-var sub_modal: HomeSubModal = null
 var season_pass_modal: SeasonPassModal = null
 var profile_modal: ProfileModal = null
 var social: SocialManager = null
+var shop_screen: ShopScreen = null
+var skin_previews: SkinPreviewRenderer = null
+var coins: int = 0
+var _coin_btn_rect: Rect2 = Rect2()
+var _wardrobe_btn_rect: Rect2 = Rect2()
 
 var is_loading: bool = false
 var loading_progress: float = 0.0
@@ -111,12 +120,22 @@ func _ready() -> void:
 
 	social = SocialManager.new()
 	social.name = "SocialManager"
+	# Headless runs are tests and tools, never a player: keep them out of the real save file.
+	social.persistence_enabled = DisplayServer.get_name() != "headless"
 	add_child(social)
 	_sync_from_social()
 	social.lobby_changed.connect(_sync_from_social)
 	social.tasks_changed.connect(_sync_from_social)
 	social.pass_changed.connect(_sync_from_social)
 	social.profile_changed.connect(_sync_from_social)
+	social.wallet_changed.connect(_sync_from_social)
+	social.inventory_changed.connect(_sync_from_social)
+	social.refresh_shop_day()
+
+	# One renderer feeds 3D skin thumbnails to the shop, the pass and the reward popups.
+	skin_previews = SkinPreviewRendererScript.new()
+	skin_previews.name = "SkinPreviewRenderer"
+	add_child(skin_previews)
 
 	settings_modal = InGameSettingsModalScript.new()
 	settings_modal.name = "HomeSettingsModal"
@@ -133,20 +152,28 @@ func _ready() -> void:
 	)
 	add_child(friends_modal)
 
-	sub_modal = HomeSubModalScript.new()
-	sub_modal.name = "HomeSubModal"
-	sub_modal.social = social
-	sub_modal.cosmetic_equipped.connect(func(col: Color) -> void:
-		equipped_color = col
-		selected_color = col
-		color_selected.emit(col)
-	)
-	add_child(sub_modal)
-
 	season_pass_modal = SeasonPassModalScript.new()
 	season_pass_modal.name = "SeasonPassModal"
 	season_pass_modal.social = social
+	season_pass_modal.previews = skin_previews
+	season_pass_modal.sound = sound_controller
 	add_child(season_pass_modal)
+
+	shop_screen = ShopScreenScript.new()
+	shop_screen.name = "ShopScreen"
+	shop_screen.social = social
+	shop_screen.previews = skin_previews
+	shop_screen.sound = sound_controller
+	add_child(shop_screen)
+	# The pass sends you to the shop for Splice Plus; the shop sends you back to the pass.
+	season_pass_modal.open_shop_requested.connect(func() -> void:
+		season_pass_modal.close()
+		shop_screen.open()
+	)
+	shop_screen.open_pass_requested.connect(func() -> void:
+		shop_screen.close()
+		season_pass_modal.open(SeasonPassModal.TAB_REWARDS)
+	)
 
 	profile_modal = ProfileModalScript.new()
 	profile_modal.name = "ProfileModal"
@@ -162,9 +189,8 @@ func _sync_from_social() -> void:
 	season_level = social.season_level
 	season_xp = social.season_xp
 	season_xp_max = social.season_xp_max
-	var claimable: int = social.get_claimable_task_count()
-	if claimable > 0:
-		season_badge_count = claimable
+	coins = social.coins
+	season_badge_count = social.get_claimable_task_count()
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -186,9 +212,9 @@ func _input(event: InputEvent) -> void:
 		return
 	if friends_modal != null and friends_modal.is_open:
 		return
-	if sub_modal != null and sub_modal.is_open:
-		return
 	if season_pass_modal != null and season_pass_modal.is_open:
+		return
+	if shop_screen != null and shop_screen.is_open:
 		return
 	if profile_modal != null and profile_modal.is_open:
 		return
@@ -230,6 +256,11 @@ func _handle_press_at(pos: Vector2, pointer_idx: int) -> bool:
 			is_appearance_open = false
 			queue_redraw()
 			return true
+		if _wardrobe_btn_rect.has_area() and _wardrobe_btn_rect.has_point(pos):
+			if shop_screen != null:
+				shop_screen.open()
+				shop_screen.scroll_to(ShopScreen.WARDROBE_TITLE_Y - 50.0, false)
+			return true
 		if _play_btn_rect.has_point(pos):
 			_commit_preview_selection()
 			start_loading_flow()
@@ -254,6 +285,10 @@ func _handle_press_at(pos: Vector2, pointer_idx: int) -> bool:
 		return false
 
 	# Home screen interactions
+	if _coin_btn_rect.has_area() and _coin_btn_rect.has_point(pos):
+		if shop_screen != null:
+			shop_screen.open()
+		return true
 	if _profile_rect.has_point(pos):
 		if profile_modal != null:
 			profile_modal.open(equipped_color)
@@ -271,8 +306,8 @@ func _handle_press_at(pos: Vector2, pointer_idx: int) -> bool:
 		queue_redraw()
 		return true
 	if _shop_btn_rect.has_point(pos):
-		if sub_modal != null:
-			sub_modal.open_shop(equipped_color)
+		if shop_screen != null:
+			shop_screen.open()
 		return true
 	if _friends_btn_rect.has_point(pos):
 		if friends_modal != null:
@@ -371,10 +406,14 @@ func _draw_home_screen(sz: Vector2) -> void:
 	_draw_hero_avatar(av_rect)
 
 	# Player name + Cup + Trophies
-	_draw_outlined_text(FONT_BOLD, Vector2(av_rect.end.x + 12.0, prof_rect.position.y + 33.0), player_name, HORIZONTAL_ALIGNMENT_LEFT, prof_w - 86.0, 24, Color.WHITE, 2.5)
+	_draw_outlined_text(FONT_BOLD, Vector2(av_rect.end.x + 12.0, prof_rect.position.y + 33.0), player_name, HORIZONTAL_ALIGNMENT_LEFT, prof_w - 86.0 - 130.0, 24, Color.WHITE, 2.5)
 	if CUP_TEX != null:
 		draw_texture_rect(CUP_TEX, Rect2(av_rect.end.x + 12.0, prof_rect.position.y + 41.0, 20.0, 17.0), false)
 	_draw_outlined_text(FONT_BOLD, Vector2(av_rect.end.x + 37.0, prof_rect.position.y + 56.0), str(trophies), HORIZONTAL_ALIGNMENT_LEFT, 160.0, 19, Color(0.98, 0.78, 0.15), 2.0)
+
+	# Wallet: coins on the right of the profile bar. Tapping it opens the shop.
+	_coin_btn_rect = Rect2(prof_rect.end.x - 126.0, prof_rect.position.y + 14.0, 114.0, 40.0)
+	UIKit.coin_pill(self, _coin_btn_rect, str(coins), 20, Color(0.09, 0.11, 0.20, 0.95))
 
 	# Hamburger button
 	_draw_brawl_box(_hamburger_rect, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 14.0, 2.5)
@@ -599,6 +638,11 @@ func _draw_appearance_drawer(sz: Vector2) -> void:
 	_drawer_close_rect = Rect2(bot_panel.end.x - 44.0, bot_panel.position.y - 42.0, 38.0, 34.0)
 	_draw_brawl_box(_drawer_close_rect, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 9.0, 2.0)
 	_draw_outlined_text(FONT_BOLD, Vector2(_drawer_close_rect.position.x, _drawer_close_rect.position.y + 24.0), "✕", HORIZONTAL_ALIGNMENT_CENTER, 38.0, 18, Color.WHITE, 1.5)
+
+	# Skins live in the shop wardrobe: this takes you straight there.
+	_wardrobe_btn_rect = Rect2(bot_panel.position.x + 6.0, bot_panel.position.y - 42.0, 168.0, 34.0)
+	_draw_brawl_box(_wardrobe_btn_rect, Color(1.0, 0.18, 0.58), Color(0.68, 0.08, 0.36), DARK_BORDER, 9.0, 2.0)
+	_draw_outlined_text(FONT_BOLD, Vector2(_wardrobe_btn_rect.position.x, _wardrobe_btn_rect.position.y + 23.0), tr(&"HOME_WARDROBE_BTN"), HORIZONTAL_ALIGNMENT_CENTER, _wardrobe_btn_rect.size.x, 16, Color.WHITE, 1.5)
 
 	# CATEGORY TABS
 	var tab_names := [tr(&"MENU_TAB_HEAD"), tr(&"MENU_TAB_ARMS"), tr(&"MENU_TAB_LEGS"), tr(&"MENU_TAB_CORE"), tr(&"MENU_TAB_COLOR")]

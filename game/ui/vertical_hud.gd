@@ -25,6 +25,12 @@ var settings_modal: Control = null
 var is_abomination: bool = false
 var is_frenzy: bool = false
 var show_result_overlay: bool = false
+# XP and coins earned in the match just finished (SocialManager.grant_match_rewards summary).
+var match_rewards: Dictionary = {}
+var match_rewards_xp_max: int = 900
+var _rewards_age: float = 0.0
+const REWARDS_FILL_DELAY_SEC: float = 0.5
+const REWARDS_FILL_SEC: float = 1.6
 var player_rank: int = 1
 var player_lives: int = 3
 var is_player_eliminated: bool = false
@@ -132,6 +138,9 @@ func _process(delta: float) -> void:
 	if show_result_overlay and result_countdown_sec > 0.0:
 		result_countdown_sec = maxf(0.0, result_countdown_sec - delta)
 		needs_redraw = true
+	if show_result_overlay and not match_rewards.is_empty():
+		_rewards_age += delta
+		needs_redraw = true
 	if needs_redraw:
 		queue_redraw()
 
@@ -197,6 +206,76 @@ func on_match_ended(board: Array[Dictionary], rank: int, duration_sec: float = 5
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	queue_redraw()
 
+## Shows what the match paid out under the result card: XP lines, coins, and the Season Pass
+## bar filling from where it was to where it is now.
+func show_match_rewards(summary: Dictionary, xp_max: int) -> void:
+	match_rewards = summary
+	match_rewards_xp_max = maxi(1, xp_max)
+	_rewards_age = 0.0
+	queue_redraw()
+
+## Pass progress (level + fraction) shown at this moment of the fill animation.
+func get_rewards_shown_progress() -> float:
+	if match_rewards.is_empty():
+		return 0.0
+	var cap: float = float(EconomyCatalog.SEASON_TIER_COUNT)
+	var before: float = minf(cap, float(match_rewards.get("level_before", 1)) + float(match_rewards.get("xp_before", 0)) / float(match_rewards_xp_max))
+	var after: float = minf(cap, float(match_rewards.get("level_after", 1)) + float(match_rewards.get("xp_after", 0)) / float(match_rewards_xp_max))
+	var k: float = UIKit.ease_out_cubic((_rewards_age - REWARDS_FILL_DELAY_SEC) / REWARDS_FILL_SEC)
+	return lerpf(before, after, k)
+
+func _draw_match_rewards(rect_size: Vector2, top_y: float) -> void:
+	if match_rewards.is_empty():
+		return
+	var pop: float = UIKit.ease_out_back(_rewards_age / 0.3)
+	var card := UIKit.scaled(Rect2(rect_size.x * 0.5 - 210.0, top_y, 420.0, 206.0), pop)
+	UIKit.box(self, card, Color(0.16, 0.14, 0.40, 0.98), Color(0.09, 0.07, 0.24), UIKit.DARK, 16.0, 3.0, 5.0)
+	UIKit.text(self, Vector2(card.position.x + 18.0, card.position.y + 34.0), tr(&"RESULT_REWARDS_TITLE"), HORIZONTAL_ALIGNMENT_LEFT, 180.0, 22, UIKit.GOLD, 2.5)
+
+	# Totals on the right: XP and coins.
+	var xp_total: int = int(match_rewards.get("xp", 0))
+	var coin_total: int = int(match_rewards.get("coins", 0))
+	var coin_r := Rect2(card.end.x - 104.0, card.position.y + 12.0, 90.0, 32.0)
+	UIKit.coin_pill(self, coin_r, "+%d" % coin_total, 17)
+	UIKit.text(self, Vector2(coin_r.position.x - 124.0, card.position.y + 34.0), tr(&"PASS_XP_GAINED") % xp_total, HORIZONTAL_ALIGNMENT_RIGHT, 114.0, 20, Color(0.55, 1.0, 0.70), 2.0)
+
+	# Where the XP came from: lines pop in one after the other, two per row.
+	var lines: Array = match_rewards.get("lines", [])
+	for i: int in range(mini(lines.size(), 6)):
+		var line_age: float = _rewards_age - 0.15 - float(i) * 0.12
+		if line_age <= 0.0:
+			continue
+		var line: Dictionary = lines[i]
+		var label: String = tr(line["key"] as StringName)
+		if label.find("%d") != -1:
+			label = label % int(line.get("count", 1))
+		var lx: float = card.position.x + 18.0 + float(i % 2) * 196.0
+		var ly: float = card.position.y + 62.0 + float(i / 2) * 22.0
+		var a: float = clampf(line_age / 0.2, 0.0, 1.0)
+		UIKit.text(self, Vector2(lx, ly), label, HORIZONTAL_ALIGNMENT_LEFT, 130.0, 14, Color(0.90, 0.92, 1.0, a), 1.5)
+		UIKit.text(self, Vector2(lx + 126.0, ly), "+%d" % int(line.get("xp", 0)), HORIZONTAL_ALIGNMENT_RIGHT, 56.0, 14, Color(0.55, 1.0, 0.70, a), 1.5)
+
+	# Season Pass bar filling up, with the level badge bumping on each level gained.
+	var progress: float = get_rewards_shown_progress()
+	var level_now: int = clampi(int(floor(progress)), 1, EconomyCatalog.SEASON_TIER_COUNT)
+	var maxed: bool = level_now >= EconomyCatalog.SEASON_TIER_COUNT
+	var frac: float = 1.0 if maxed else progress - float(level_now)
+	var bar := Rect2(card.position.x + 46.0, card.position.y + 134.0, card.size.x - 92.0, 28.0)
+	UIKit.progress_bar(self, bar, frac)
+	UIKit.text_in(self, bar, tr(&"PASS_MAX") if maxed else "%d / %d XP" % [int(round(frac * float(match_rewards_xp_max))), match_rewards_xp_max], 15, Color.WHITE, 2.0)
+	var just_levelled: bool = level_now > int(match_rewards.get("level_before", level_now)) and frac < 0.12
+	for side_i: int in range(2):
+		var bc := Vector2(bar.position.x - 6.0 if side_i == 0 else bar.end.x + 6.0, bar.get_center().y)
+		var r: float = 21.0 * (1.25 if (just_levelled and side_i == 0) else 1.0)
+		draw_circle(bc, r + 3.0, UIKit.DARK)
+		draw_circle(bc, r, UIKit.GOLD if side_i == 0 else Color(0.26, 0.30, 0.48))
+		UIKit.text_in(self, Rect2(bc.x - 24.0, bc.y - 15.0, 48.0, 30.0), str(level_now if side_i == 0 else mini(level_now + 1, EconomyCatalog.SEASON_TIER_COUNT)), 18, Color.WHITE, 2.0)
+
+	var claimable: int = int(match_rewards.get("claimable", 0))
+	if claimable > 0 and _rewards_age > REWARDS_FILL_DELAY_SEC + REWARDS_FILL_SEC * 0.6:
+		var pulse: float = 0.75 + 0.25 * sin(_rewards_age * 6.0)
+		UIKit.text(self, Vector2(card.position.x, card.position.y + 192.0), tr(&"RESULT_PASS_READY") % claimable, HORIZONTAL_ALIGNMENT_CENTER, card.size.x, 15, Color(1.0, 0.86, 0.30, pulse), 2.0)
+
 func on_player_lives_updated(lives: int) -> void:
 	player_lives = lives
 	queue_redraw()
@@ -208,6 +287,7 @@ func on_player_eliminated(rank: int) -> void:
 
 func on_match_restarted() -> void:
 	show_result_overlay = false
+	match_rewards = {}
 	is_frenzy = false
 	player_lives = 3
 	is_player_eliminated = false
@@ -414,6 +494,8 @@ func _draw() -> void:
 		# 5-second countdown bar at bottom of result card
 		var bar_w: float = 330.0 * clampf(result_countdown_sec / 5.0, 0.0, 1.0)
 		draw_rect(Rect2(Vector2(_rematch_btn_rect.position.x, card_rect.end.y - 12.0), Vector2(bar_w, 4.0)), gold, true)
+
+		_draw_match_rewards(rect_size, card_rect.end.y + 16.0)
 
 func _draw_animated_intro_tutorial(rect_size: Vector2) -> void:
 	if intro_tutorial_timer <= 0.0 or show_result_overlay:

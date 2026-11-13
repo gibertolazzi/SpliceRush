@@ -68,6 +68,19 @@ extends Resource
 @export var ko_limb_burst_count: int = 2
 @export var limb_pop_speed: float = 6.2
 
+@export_group("Match Rewards")
+## Season Pass XP and coins paid at the end of a match (see shared/match_rewards.gd).
+@export var reward_xp_match: int = 60
+@export var reward_xp_per_kill: int = 12
+@export var reward_xp_per_stolen_part: int = 8
+@export var reward_xp_abomination: int = 60
+@export var reward_xp_podium: int = 80
+@export var reward_xp_win: int = 150
+@export var reward_coins_match: int = 5
+@export var reward_coins_per_kill: int = 2
+@export var reward_coins_podium: int = 10
+@export var reward_coins_win: int = 25
+
 @export_group("Input & Camera")
 @export var joystick_deadzone: float = 0.16
 @export var joystick_max_radius_px: float = 68.0

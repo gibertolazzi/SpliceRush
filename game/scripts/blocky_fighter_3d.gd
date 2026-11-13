@@ -78,6 +78,7 @@ var _transform_flash_timer: float = 0.0
 # --- Dismemberment visuals: stump sockets, grafted limbs and the limb held as a club ---
 const LIMB_KEYS: Array[StringName] = [&"arm_l", &"arm_r", &"leg_l", &"leg_r"]
 const SHATTER_VFX_SCALE: float = 0.42
+const SKIN_DARK_CLOTH_LUMA: float = 0.22 # Darker original cloth takes the skin's secondary colour
 const MIXAMO_OVERLAY_OFFSET: float = 0.00012
 const CLUB_SWING_SEC: float = 0.30
 const CLUB_HOLD_DIR := Vector3(-0.38, 0.86, 0.34)
@@ -101,6 +102,8 @@ var _club_dir := CLUB_HOLD_DIR
 var _club_side: float = 1.0
 var _bonk_squash_timer: float = 0.0
 var _collapsed_bones: Dictionary = {} # bone index -> collapsed pose scale
+var skin_id: String = ""
+var skin_palette: Dictionary = {} # {"tint", "primary", "secondary", "glow"} from EconomyCatalog
 var _overlay_meshes: Array[MeshInstance3D] = []
 
 static var _shared_outline_mat: ShaderMaterial
@@ -160,9 +163,47 @@ static func scene_for_model_type(model_type: int) -> PackedScene:
 func get_model_scene() -> PackedScene:
 	return scene_for_model_type(character_model_type)
 
-## How this fighter's loose limbs are coloured: bots wear their flat team colour, the player keeps the outfit.
+## How this fighter's loose limbs are coloured: bots wear their flat team colour, the player
+## keeps the outfit, or the skin's main colour when the skin recolours it.
 func get_limb_tint_amount() -> float:
-	return 0.0 if fighter_id == 0 else 1.0
+	if fighter_id == 0:
+		return float(skin_palette.get("tint", 0.0))
+	return 1.0
+
+func get_limb_tint_color() -> Color:
+	if fighter_id == 0 and float(skin_palette.get("tint", 0.0)) > 0.0:
+		return skin_palette.get("primary", base_color) as Color
+	return base_color
+
+static func model_type_for_skin_model(model_name: String) -> CharacterModelType:
+	match model_name:
+		"man_officer":
+			return CharacterModelType.MAN_OFFICER
+		"woman_cutie":
+			return CharacterModelType.WOMAN_CUTIE
+		"woman_officer":
+			return CharacterModelType.WOMAN_OFFICER
+	return CharacterModelType.MAN_CUTIE
+
+## Dresses the fighter in a skin from EconomyCatalog: swaps the character model and recolours
+## the outfit in two tones (light cloth takes the primary colour, dark cloth the secondary).
+## Skin and eyes keep their own colours. Purely cosmetic.
+func apply_skin(skin: Dictionary) -> void:
+	skin_id = str(skin.get("id", ""))
+	skin_palette = {
+		"tint": float(skin.get("tint", 0.0)),
+		"primary": Color(str(skin.get("primary", "#FFFFFF"))),
+		"secondary": Color(str(skin.get("secondary", "#FFFFFF"))),
+		"glow": float(skin.get("glow", 0.0)),
+	}
+	var slots: Dictionary = current_slots.duplicate()
+	var held_slot: int = held_limb_slot
+	var held: Dictionary = _held_info.duplicate()
+	var grafts: Dictionary = _grafts.duplicate(true)
+	current_slots = {}
+	setup_fighter(fighter_id, is_bot, base_color, shape_id, slots, is_abomination, int(model_type_for_skin_model(str(skin.get("model", "man_cutie")))))
+	if held_slot >= 0 or not grafts.is_empty():
+		apply_body_state(held_slot, held, grafts)
 
 func setup_fighter(id: int, bot: bool, color: Color, a11y_shape: int, initial_slots: Dictionary = {}, abom: bool = false, model_type: int = -1) -> void:
 	fighter_id = id
@@ -688,6 +729,11 @@ func _build_base_skeleton() -> void:
 								toon_m.set_shader_parameter("skin_warmth_boost", 0.55)
 							else:
 								var col: Color = orig_c if fighter_id == 0 else base_color
+								var skin_tint: float = float(skin_palette.get("tint", 0.0)) if fighter_id == 0 else 0.0
+								if skin_tint > 0.0:
+									var skin_target: Color = (skin_palette["secondary"] if orig_c.get_luminance() < SKIN_DARK_CLOTH_LUMA else skin_palette["primary"]) as Color
+									col = orig_c.lerp(skin_target, skin_tint)
+									toon_m.set_shader_parameter("emission_boost", 0.05 + float(skin_palette.get("glow", 0.0)))
 								toon_m.set_shader_parameter("base_color", col)
 							toon_m.set_shader_parameter("rim_color", Color(0.92, 0.82, 1.0))
 							toon_m.set_shader_parameter("rim_power", 2.2)

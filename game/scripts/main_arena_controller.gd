@@ -67,6 +67,9 @@ var _preview_settings: bool = false
 var _preview_9parts: bool = false
 var _preview_limbs: bool = false
 var _preview_brawl: bool = false
+var _preview_menu: String = "" # "shop" | "pass" | "pass-xp" | "missions"
+var _preview_scroll: float = -1.0
+var _preview_skin: String = ""
 var _camera_transitioning: bool = false
 
 func _ready() -> void:
@@ -252,6 +255,12 @@ func _parse_cmdline_args() -> void:
 			_preview_limbs = true
 			_preview_brawl = true
 			_skip_customize = true
+		elif arg.begins_with("--preview-menu="):
+			_preview_menu = arg.trim_prefix("--preview-menu=")
+		elif arg.begins_with("--preview-scroll="):
+			_preview_scroll = float(arg.trim_prefix("--preview-scroll="))
+		elif arg.begins_with("--preview-skin="):
+			_preview_skin = arg.trim_prefix("--preview-skin=")
 		elif arg == "--preview-loading":
 			_preview_loading = true
 		elif arg == "--preview-one-leg":
@@ -536,7 +545,7 @@ func _resolve_fighter_visual_info(fighter_id: int) -> Dictionary:
 	var fn: BlockyFighter3D = fighter_nodes[fighter_id]
 	return {
 		"scene": fn.get_model_scene(),
-		"tint": fn.base_color,
+		"tint": fn.get_limb_tint_color(),
 		"tint_amount": fn.get_limb_tint_amount(),
 	}
 
@@ -631,6 +640,14 @@ func _setup_ui() -> void:
 	customization_menu.hero_rotated.connect(_on_custom_hero_rotated)
 	customization_menu.play_pressed.connect(_on_custom_play_pressed)
 	layer.add_child(customization_menu)
+	var menu_social: Variant = customization_menu.get("social")
+	if menu_social != null:
+		# Screenshot and preview runs must never write into the player's real save.
+		if _screenshot_path != "":
+			menu_social.persistence_enabled = false
+		menu_social.inventory_changed.connect(_apply_player_skin)
+	_apply_player_skin(false)
+	_stage_menu_preview()
 
 	virtual_joystick = TouchJoystick.new()
 	virtual_joystick.name = "VirtualJoystick"
@@ -1065,6 +1082,11 @@ func _on_server_match_ended(leaderboard: Array[Dictionary], player_rank: int) ->
 			if not server.combatants.is_empty():
 				var p0: MatchServer.CombatantState = server.combatants[0]
 				soc.record_match_result(p0.stolen_parts_count, p0.is_abomination, player_rank, p0.kills)
+				# Season Pass XP and coins for the match, shown on the result screen.
+				var rewards: Dictionary = MatchRewards.compute(balance, player_rank, p0.kills, p0.stolen_parts_count, p0.is_abomination)
+				var summary: Dictionary = soc.grant_match_rewards(rewards)
+				if hud != null:
+					hud.show_match_rewards(summary, int(soc.season_xp_max))
 	if hud != null:
 		hud.on_match_ended(leaderboard, player_rank, balance.result_screen_duration_sec)
 
@@ -1113,6 +1135,48 @@ func _update_web_telemetry() -> void:
 		var fps: float = Engine.get_frames_per_second()
 		var dc: float = Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
 		JavaScriptBridge.eval("if(window.__spliceRushMetrics){window.__spliceRushMetrics.fpsSamples.push(%.1f);window.__spliceRushMetrics.drawCalls=%d;}" % [fps, int(dc)])
+
+## Screenshot staging for the menu screens: --preview-menu=shop|pass|pass-xp|missions,
+## optional --preview-scroll=<px> and --preview-skin=<skin id>. Never saves.
+func _stage_menu_preview() -> void:
+	if customization_menu == null or (_preview_menu == "" and _preview_skin == ""):
+		return
+	var soc: SocialManager = customization_menu.get("social") as SocialManager
+	if soc == null:
+		return
+	soc.persistence_enabled = false
+	if _preview_skin != "" and EconomyCatalog.has_skin(_preview_skin):
+		soc.unlock_skin(_preview_skin)
+		soc.equip_skin(_preview_skin)
+	var shop: ShopScreen = customization_menu.get("shop_screen") as ShopScreen
+	var pass_modal: SeasonPassModal = customization_menu.get("season_pass_modal") as SeasonPassModal
+	match _preview_menu:
+		"shop":
+			shop.open()
+			if _preview_scroll >= 0.0:
+				shop.scroll_to(_preview_scroll, false)
+		"pass", "pass-xp", "missions":
+			if _preview_menu == "pass-xp":
+				soc.grant_match_rewards(MatchRewards.compute(balance, 1, 6, 5, true))
+			pass_modal.open(SeasonPassModal.TAB_MISSIONS if _preview_menu == "missions" else SeasonPassModal.TAB_REWARDS)
+			if _preview_scroll >= 0.0:
+				pass_modal.scroll_to(_preview_scroll, false)
+
+## Dresses the player's fighter in the skin equipped in the shop or the Season Pass.
+func _apply_player_skin(animate: bool = true) -> void:
+	if fighter_nodes.is_empty() or customization_menu == null:
+		return
+	var soc: Variant = customization_menu.get("social")
+	if soc == null:
+		return
+	var skin: Dictionary = EconomyCatalog.get_skin(str(soc.equipped_skin))
+	var fn: BlockyFighter3D = fighter_nodes[0]
+	if fn.skin_id == str(skin["id"]):
+		return
+	fn.apply_skin(skin)
+	_apply_body_state(0)
+	if animate:
+		fn.trigger_transform_pop()
 
 func _on_custom_part_selected(slot: int, part_id: StringName) -> void:
 	if fighter_nodes.is_empty() or customization_menu == null:

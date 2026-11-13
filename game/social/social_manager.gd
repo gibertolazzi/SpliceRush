@@ -8,8 +8,12 @@ signal tasks_changed()
 signal shop_changed()
 signal pass_changed()
 signal profile_changed()
+signal wallet_changed()
+signal inventory_changed()
 
-const SAVE_VERSION: int = 1
+const SAVE_VERSION: int = 2
+const STARTING_COINS: int = 1204
+const SECONDS_PER_DAY: int = 86400
 const DEFAULT_SAVE_PATH: String = "user://social_save.json"
 const MAX_LOBBY_SIZE: int = 4
 
@@ -35,16 +39,20 @@ var claimed_free_tiers: Array[int] = [31, 32]
 var claimed_paid_tiers: Array[int] = []
 var selected_mode: String = "survival" # "survival" | "frenzy"
 
-const SEASON_TIERS: Array[Dictionary] = [
-	{ "tier": 31, "free_it": "Cassa Base", "free_en": "Basic Chest", "free_col": "#559FDC", "paid_it": "Tinta Ciano", "paid_en": "Cyan Tint", "paid_col": "#2DE2E6" },
-	{ "tier": 32, "free_it": "Emblema Corona", "free_en": "Crown Badge", "free_col": "#FFB020", "paid_it": "Scia Neon", "paid_en": "Neon Trail", "paid_col": "#FF2E93" },
-	{ "tier": 33, "free_it": "Cassa Rara", "free_en": "Rare Chest", "free_col": "#8B5CF6", "paid_it": "Skin Viola", "paid_en": "Violet Skin", "paid_col": "#6B4EFF" },
-	{ "tier": 34, "free_it": "Gettoni x150", "free_en": "Tokens x150", "free_col": "#2EE67A", "paid_it": "Corona Plus", "paid_en": "Plus Crown", "paid_col": "#F5C418" },
-	{ "tier": 35, "free_it": "Cassa Epica", "free_en": "Epic Chest", "free_col": "#FF2E93", "paid_it": "Aura Laser", "paid_en": "Laser Aura", "paid_col": "#FF4747" },
-	{ "tier": 36, "free_it": "Tinta Verde", "free_en": "Toxic Green", "free_col": "#2EE67A", "paid_it": "Cassa Ultra", "paid_en": "Ultra Chest", "paid_col": "#F5C418" },
-	{ "tier": 37, "free_it": "Emblema Fulmine", "free_en": "Bolt Badge", "free_col": "#2DE2E6", "paid_it": "Tinta Oro", "paid_en": "Gold Tint", "paid_col": "#FFB020" },
-	{ "tier": 38, "free_it": "Mega Cassa", "free_en": "Mega Chest", "free_col": "#F5C418", "paid_it": "Skin Abominio", "paid_en": "Abom Skin", "paid_col": "#FF2E93" },
-]
+# --- Economy: coins, skins and the daily shop. Kept in the local guest save for now. ---
+# AGENTS.md wants currency, inventory and purchases owned by a backend; that stack is not chosen
+# yet, so this is the single place that would move server-side.
+var coins: int = STARTING_COINS
+var owned_skins: Array[String] = [EconomyCatalog.DEFAULT_SKIN_ID]
+var equipped_skin: String = EconomyCatalog.DEFAULT_SKIN_ID
+var shop_day: int = -1
+var shop_purchased: Array[String] = []    # daily offers already bought today
+var shop_free_claimed: Array[String] = [] # free gifts already taken today
+var purchase_gateway: PurchaseGateway = PurchaseGateway.new()
+## Injectable clock for tests: returns local time as unix seconds.
+var now_provider: Callable = Callable()
+## XP and coins from the last finished match, for the result screen and the pass animation.
+var last_match_summary: Dictionary = {}
 
 var friends: Array[Dictionary] = []
 var recent_players: Array[Dictionary] = []
@@ -306,15 +314,27 @@ func get_claimable_task_count() -> int:
 	for t: Dictionary in tasks:
 		if not bool(t.get("claimed", false)) and int(t.get("progress", 0)) >= int(t.get("target", 1)):
 			count += 1
-	for tr_d: Dictionary in SEASON_TIERS:
-		var tier_n: int = int(tr_d["tier"])
+	return count + get_claimable_pass_count()
+
+func get_claimable_pass_count() -> int:
+	var count: int = 0
+	for tier_n: int in range(1, mini(season_level, EconomyCatalog.SEASON_TIER_COUNT) + 1):
 		if can_claim_pass_tier(tier_n, false):
 			count += 1
-		if has_premium_pass and can_claim_pass_tier(tier_n, true):
+		if can_claim_pass_tier(tier_n, true):
 			count += 1
 	return count
 
+## Lowest tier with something to claim on either track, or 0 when there is nothing.
+func get_first_claimable_tier() -> int:
+	for tier_n: int in range(1, mini(season_level, EconomyCatalog.SEASON_TIER_COUNT) + 1):
+		if can_claim_pass_tier(tier_n, false) or can_claim_pass_tier(tier_n, true):
+			return tier_n
+	return 0
+
 func can_claim_pass_tier(tier_num: int, is_paid: bool) -> bool:
+	if tier_num < 1 or tier_num > EconomyCatalog.SEASON_TIER_COUNT:
+		return false
 	if tier_num > season_level:
 		return false
 	if is_paid:
@@ -325,16 +345,234 @@ func is_pass_tier_claimed(tier_num: int, is_paid: bool) -> bool:
 	return claimed_paid_tiers.has(tier_num) if is_paid else claimed_free_tiers.has(tier_num)
 
 func claim_pass_tier(tier_num: int, is_paid: bool) -> bool:
+	return not claim_pass_tier_reward(tier_num, is_paid).is_empty()
+
+## Claims one side of a tier and hands out its reward. Returns what was granted (see
+## grant_reward), or an empty dictionary when the tier cannot be claimed.
+func claim_pass_tier_reward(tier_num: int, is_paid: bool) -> Dictionary:
 	if not can_claim_pass_tier(tier_num, is_paid):
-		return false
+		return {}
 	if is_paid:
 		claimed_paid_tiers.append(tier_num)
 	else:
 		claimed_free_tiers.append(tier_num)
+	var granted: Dictionary = grant_reward(EconomyCatalog.get_tier_reward(tier_num, is_paid), false)
+	granted["tier"] = tier_num
+	granted["paid"] = is_paid
 	pass_changed.emit()
 	tasks_changed.emit()
 	save_state()
+	return granted
+
+## Claims everything available, lowest tier first. Returns one grant per claimed reward.
+func claim_all_pass_tiers() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for tier_n: int in range(1, mini(season_level, EconomyCatalog.SEASON_TIER_COUNT) + 1):
+		for paid: bool in [false, true]:
+			var granted: Dictionary = claim_pass_tier_reward(tier_n, paid)
+			if not granted.is_empty():
+				out.append(granted)
+	return out
+
+# ---------------------------------------------------------------------------
+# Wallet and inventory
+# ---------------------------------------------------------------------------
+
+func add_coins(amount: int) -> void:
+	if amount <= 0:
+		return
+	coins += amount
+	wallet_changed.emit()
+
+func spend_coins(amount: int) -> bool:
+	if amount < 0 or coins < amount:
+		return false
+	coins -= amount
+	wallet_changed.emit()
 	return true
+
+func owns_skin(skin_id: String) -> bool:
+	return owned_skins.has(skin_id)
+
+func unlock_skin(skin_id: String) -> bool:
+	if owns_skin(skin_id) or not EconomyCatalog.has_skin(skin_id):
+		return false
+	owned_skins.append(skin_id)
+	inventory_changed.emit()
+	return true
+
+func equip_skin(skin_id: String) -> bool:
+	if not owns_skin(skin_id) or equipped_skin == skin_id:
+		return false
+	equipped_skin = skin_id
+	inventory_changed.emit()
+	save_state()
+	return true
+
+## Adds Season Pass XP and levels up. The last tier is a hard cap: XP stops there.
+func add_season_xp(xp: int) -> Dictionary:
+	var before_level: int = season_level
+	var before_xp: int = season_xp
+	if xp > 0:
+		season_xp += xp
+		while season_xp >= season_xp_max and season_level < EconomyCatalog.SEASON_TIER_COUNT:
+			season_xp -= season_xp_max
+			season_level += 1
+		if season_level >= EconomyCatalog.SEASON_TIER_COUNT:
+			season_xp = mini(season_xp, season_xp_max)
+	return {
+		"xp": maxi(0, xp),
+		"level_before": before_level,
+		"xp_before": before_xp,
+		"level_after": season_level,
+		"xp_after": season_xp,
+		"levels_gained": season_level - before_level,
+	}
+
+## Hands out one reward: { "type": "coins" | "xp" | "skin" | "color", "amount", "id" }.
+## A skin or colour the player already owns turns into coins, so no reward is ever wasted.
+## Returns the reward plus "duplicate" and, for duplicates, "compensation".
+func grant_reward(reward: Dictionary, persist: bool = true) -> Dictionary:
+	var out: Dictionary = reward.duplicate()
+	out["duplicate"] = false
+	match str(reward.get("type", "")):
+		"coins":
+			add_coins(int(reward.get("amount", 0)))
+		"xp":
+			out["progress"] = add_season_xp(int(reward.get("amount", 0)))
+			pass_changed.emit()
+		"skin":
+			var skin_id: String = str(reward.get("id", ""))
+			if not unlock_skin(skin_id):
+				var comp: int = EconomyCatalog.get_duplicate_compensation(int(EconomyCatalog.get_skin(skin_id)["rarity"]))
+				out["duplicate"] = true
+				out["compensation"] = comp
+				add_coins(comp)
+		"color":
+			if not unlock_color(Color(str(reward.get("id", "#FFFFFF")))):
+				var comp_c: int = EconomyCatalog.get_duplicate_compensation(EconomyCatalog.Rarity.COMMON)
+				out["duplicate"] = true
+				out["compensation"] = comp_c
+				add_coins(comp_c)
+		_:
+			return {}
+	if persist:
+		save_state()
+	return out
+
+# ---------------------------------------------------------------------------
+# Daily shop
+# ---------------------------------------------------------------------------
+
+func get_now_local_unix() -> float:
+	if now_provider.is_valid():
+		return float(now_provider.call())
+	var bias_min: int = int(Time.get_time_zone_from_system().get("bias", 0))
+	return Time.get_unix_time_from_system() + float(bias_min) * 60.0
+
+func get_day_index() -> int:
+	return int(floor(get_now_local_unix() / float(SECONDS_PER_DAY)))
+
+## Real seconds until local midnight, when the daily offers and free gifts change.
+func seconds_until_shop_reset() -> int:
+	var now: float = get_now_local_unix()
+	return maxi(0, int(ceil(float((get_day_index() + 1) * SECONDS_PER_DAY) - now)))
+
+## Rolls the shop over when the day changed. Returns true if it did.
+func refresh_shop_day() -> bool:
+	var today: int = get_day_index()
+	if today == shop_day:
+		return false
+	shop_day = today
+	shop_purchased.clear()
+	shop_free_claimed.clear()
+	shop_changed.emit()
+	save_state()
+	return true
+
+func get_daily_offers() -> Dictionary:
+	refresh_shop_day()
+	return EconomyCatalog.get_daily_offers(shop_day)
+
+## Buys a skin with coins. `daily` uses today's discounted price for the featured skin.
+## Returns { "ok": bool, "reason": "" | "owned" | "not_for_sale" | "coins", "price": int }.
+func buy_skin(skin_id: String, daily: bool = false) -> Dictionary:
+	if not EconomyCatalog.has_skin(skin_id):
+		return { "ok": false, "reason": "not_for_sale", "price": 0 }
+	var skin: Dictionary = EconomyCatalog.get_skin(skin_id)
+	var price: int = int(skin["price"])
+	if daily:
+		var offers: Dictionary = get_daily_offers()
+		if str(offers["skin_id"]) != skin_id:
+			return { "ok": false, "reason": "not_for_sale", "price": 0 }
+		price = int(offers["skin_price"])
+	if owns_skin(skin_id):
+		return { "ok": false, "reason": "owned", "price": price }
+	if price <= 0:
+		return { "ok": false, "reason": "not_for_sale", "price": 0 }
+	if not spend_coins(price):
+		return { "ok": false, "reason": "coins", "price": price }
+	unlock_skin(skin_id)
+	if daily:
+		shop_purchased.append("skin")
+	shop_changed.emit()
+	save_state()
+	return { "ok": true, "reason": "", "price": price }
+
+func is_free_offer_claimed(offer_id: String) -> bool:
+	refresh_shop_day()
+	return shop_free_claimed.has(offer_id)
+
+## Takes one of today's free gifts. Returns the granted reward, or empty if already taken.
+func claim_free_offer(offer_id: String) -> Dictionary:
+	if is_free_offer_claimed(offer_id):
+		return {}
+	for offer: Dictionary in EconomyCatalog.FREE_OFFERS:
+		if str(offer["id"]) == offer_id:
+			shop_free_claimed.append(offer_id)
+			var granted: Dictionary = grant_reward(offer, false)
+			shop_changed.emit()
+			save_state()
+			return granted
+	return {}
+
+## Real-money coin pack through the purchase gateway.
+## Returns { "ok": bool, "reason": "" | "unavailable" | "unknown", "coins": int }.
+func purchase_coin_pack(pack_id: String) -> Dictionary:
+	var pack: Dictionary = EconomyCatalog.get_coin_pack(pack_id)
+	if pack.is_empty():
+		return { "ok": false, "reason": "unknown", "coins": 0 }
+	if purchase_gateway == null or not purchase_gateway.is_available() or not purchase_gateway.purchase(pack_id):
+		return { "ok": false, "reason": "unavailable", "coins": 0 }
+	add_coins(int(pack["coins"]))
+	save_state()
+	return { "ok": true, "reason": "", "coins": int(pack["coins"]) }
+
+## Splice Plus (the paid pass track) through the purchase gateway.
+func purchase_plus() -> Dictionary:
+	if has_premium_pass:
+		return { "ok": false, "reason": "owned" }
+	if purchase_gateway == null or not purchase_gateway.is_available() or not purchase_gateway.purchase(EconomyCatalog.PRODUCT_SPLICE_PLUS):
+		return { "ok": false, "reason": "unavailable" }
+	activate_premium_pass()
+	return { "ok": true, "reason": "" }
+
+## Pays out a finished match (see MatchRewards.compute) and remembers the before/after pass
+## progress so the result screen and the pass can animate it.
+func grant_match_rewards(rewards: Dictionary) -> Dictionary:
+	var progress: Dictionary = add_season_xp(int(rewards.get("xp", 0)))
+	var coins_before: int = coins
+	add_coins(int(rewards.get("coins", 0)))
+	last_match_summary = progress
+	last_match_summary["coins"] = int(rewards.get("coins", 0))
+	last_match_summary["coins_before"] = coins_before
+	last_match_summary["lines"] = rewards.get("lines", [])
+	last_match_summary["claimable"] = get_claimable_pass_count()
+	last_match_summary["shown_in_pass"] = false
+	pass_changed.emit()
+	tasks_changed.emit()
+	save_state()
+	return last_match_summary
 
 func activate_premium_pass() -> void:
 	if has_premium_pass:
@@ -401,10 +639,8 @@ func claim_task(task_id: String) -> int:
 				return 0
 			t["claimed"] = true
 			var xp: int = int(t.get("xp", 100))
-			season_xp += xp
-			while season_xp >= season_xp_max:
-				season_xp -= season_xp_max
-				season_level += 1
+			add_season_xp(xp)
+			pass_changed.emit()
 			tasks_changed.emit()
 			save_state()
 			return xp
@@ -450,12 +686,35 @@ func capture_state() -> Dictionary:
 		"recent_players": recent_players.duplicate(true),
 		"tasks": tasks.duplicate(true),
 		"unlocked_colors": col_hexes,
+		"coins": coins,
+		"owned_skins": owned_skins.duplicate(),
+		"equipped_skin": equipped_skin,
+		"shop_day": shop_day,
+		"shop_purchased": shop_purchased.duplicate(),
+		"shop_free_claimed": shop_free_claimed.duplicate(),
 	}
 
-func apply_state(data: Dictionary) -> bool:
-	var ver: int = int(data.get("version", 0))
-	if ver <= 0 or ver > SAVE_VERSION:
+## Brings an older save up to the current version, one step at a time.
+static func migrate_state(data: Dictionary) -> Dictionary:
+	var out: Dictionary = data.duplicate(true)
+	var ver: int = int(out.get("version", 0))
+	if ver == 1:
+		# v1 had no economy: start the wallet and wardrobe, keep all progress.
+		out["coins"] = STARTING_COINS
+		out["owned_skins"] = [EconomyCatalog.DEFAULT_SKIN_ID]
+		out["equipped_skin"] = EconomyCatalog.DEFAULT_SKIN_ID
+		out["shop_day"] = -1
+		out["shop_purchased"] = []
+		out["shop_free_claimed"] = []
+		ver = 2
+	out["version"] = ver
+	return out
+
+func apply_state(raw: Dictionary) -> bool:
+	var raw_ver: int = int(raw.get("version", 0))
+	if raw_ver <= 0 or raw_ver > SAVE_VERSION:
 		return false
+	var data: Dictionary = migrate_state(raw)
 	player_username = str(data.get("player_username", player_username))
 	player_tag = str(data.get("player_tag", player_tag))
 	player_trophies = int(data.get("player_trophies", player_trophies))
@@ -497,6 +756,27 @@ func apply_state(data: Dictionary) -> bool:
 		unlocked_colors.clear()
 		for hx: Variant in data["unlocked_colors"]:
 			unlocked_colors.append(Color(str(hx)))
+	coins = maxi(0, int(data.get("coins", coins)))
+	if data.get("owned_skins") is Array:
+		owned_skins.clear()
+		for sid: Variant in data["owned_skins"]:
+			if EconomyCatalog.has_skin(str(sid)) and not owned_skins.has(str(sid)):
+				owned_skins.append(str(sid))
+	if not owned_skins.has(EconomyCatalog.DEFAULT_SKIN_ID):
+		owned_skins.insert(0, EconomyCatalog.DEFAULT_SKIN_ID)
+	equipped_skin = str(data.get("equipped_skin", equipped_skin))
+	if not owned_skins.has(equipped_skin):
+		equipped_skin = EconomyCatalog.DEFAULT_SKIN_ID
+	shop_day = int(data.get("shop_day", shop_day))
+	shop_purchased.clear()
+	if data.get("shop_purchased") is Array:
+		for v: Variant in data["shop_purchased"]:
+			shop_purchased.append(str(v))
+	shop_free_claimed.clear()
+	if data.get("shop_free_claimed") is Array:
+		for v: Variant in data["shop_free_claimed"]:
+			shop_free_claimed.append(str(v))
+	season_level = clampi(season_level, 1, EconomyCatalog.SEASON_TIER_COUNT)
 	return true
 
 func save_state() -> void:
