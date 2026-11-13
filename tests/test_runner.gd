@@ -46,6 +46,15 @@ func _initialize() -> void:
 		"test_return_to_customize_menu_after_match",
 		"test_friends_search_recent_and_lobby_system",
 		"test_season_pass_dual_track_and_profile_stats",
+		"test_wallet_buys_skins_and_refuses_what_it_cannot_afford",
+		"test_daily_shop_rotates_on_the_real_day_and_gifts_reset",
+		"test_real_money_products_need_the_purchase_gateway",
+		"test_season_pass_tiers_grant_rewards_and_pay_back_duplicates",
+		"test_reward_track_is_cosmetic_only_and_every_skin_is_reachable",
+		"test_match_rewards_feed_season_xp_and_result_screen",
+		"test_save_v1_migrates_to_v2_and_round_trips_economy",
+		"test_fighter_wears_skin_model_and_palette",
+		"test_shop_and_pass_screens_scroll_claim_and_celebrate",
 	]
 	for t: String in test_methods:
 		var ok: Variant = call(t)
@@ -1934,5 +1943,439 @@ func test_season_pass_dual_track_and_profile_stats() -> bool:
 
 	pass_modal.free()
 	prof_modal.free()
+	soc.free()
+	return true
+
+
+# ---------------------------------------------------------------------------
+# Economy: coins, shop, skins, Season Pass rewards, match payouts.
+# ---------------------------------------------------------------------------
+
+func _make_economy_profile() -> SocialManager:
+	var soc := SocialManager.new("")
+	soc.persistence_enabled = false
+	return soc
+
+func test_wallet_buys_skins_and_refuses_what_it_cannot_afford() -> bool:
+	# Arrange
+	var soc: SocialManager = _make_economy_profile()
+	var start: int = soc.coins
+	var stella_price: int = int(EconomyCatalog.get_skin("stella")["price"])
+
+	# Act / Assert: a normal purchase
+	var res: Dictionary = soc.buy_skin("stella")
+	assert_eq(bool(res["ok"]), true, "buying_affordable_skin_succeeds")
+	assert_eq(soc.coins, start - stella_price, "coins_spent_equal_the_price")
+	assert_eq(soc.owns_skin("stella"), true, "bought_skin_is_owned")
+
+	# Buying it again or buying a pass-only skin is refused and costs nothing.
+	assert_eq(str(soc.buy_skin("stella")["reason"]), "owned", "owned_skin_cannot_be_bought_twice")
+	assert_eq(str(soc.buy_skin("oro")["reason"]), "not_for_sale", "pass_only_skin_is_not_for_sale")
+	assert_eq(str(soc.buy_skin("does_not_exist")["reason"]), "not_for_sale", "unknown_skin_is_refused")
+	assert_eq(soc.coins, start - stella_price, "refused_purchases_cost_nothing")
+
+	# Not enough coins.
+	soc.coins = 10
+	var poor: Dictionary = soc.buy_skin("cromo")
+	assert_eq(str(poor["reason"]), "coins", "too_expensive_skin_is_refused")
+	assert_eq(soc.coins, 10, "refused_purchase_keeps_the_coins")
+	assert_eq(soc.owns_skin("cromo"), false, "unaffordable_skin_not_unlocked")
+	assert_eq(soc.spend_coins(11), false, "cannot_spend_more_than_owned")
+	assert_eq(soc.spend_coins(-5), false, "cannot_spend_a_negative_amount")
+
+	# Equipping.
+	assert_eq(soc.equip_skin("stella"), true, "owned_skin_can_be_equipped")
+	assert_eq(soc.equipped_skin, "stella", "equipped_skin_recorded")
+	assert_eq(soc.equip_skin("cromo"), false, "unowned_skin_cannot_be_equipped")
+	soc.free()
+	return true
+
+func test_daily_shop_rotates_on_the_real_day_and_gifts_reset() -> bool:
+	# Arrange: a fixed clock, 6 hours into day 20000.
+	var soc: SocialManager = _make_economy_profile()
+	var clock: Array[float] = [20000.0 * 86400.0 + 6.0 * 3600.0]
+	soc.now_provider = func() -> float: return clock[0]
+
+	# Act
+	var offers: Dictionary = soc.get_daily_offers()
+
+	# Assert: same day, same offers, and the countdown is the real time to midnight.
+	assert_eq(offers, EconomyCatalog.get_daily_offers(20000), "daily_offers_are_a_pure_function_of_the_day")
+	assert_eq(soc.seconds_until_shop_reset(), 18 * 3600, "countdown_is_real_time_to_midnight")
+	assert_eq((offers["packs"] as Array).size(), 2, "two_coin_packs_per_day")
+	assert_true(int(offers["skin_price"]) < int(offers["skin_full_price"]), "daily_skin_is_really_discounted")
+
+	# Free gifts: once per day each.
+	var coins_before: int = soc.coins
+	var gift: Dictionary = soc.claim_free_offer("free_coins")
+	assert_eq(int(gift.get("amount", 0)), 10, "free_coin_gift_granted")
+	assert_eq(soc.coins, coins_before + 10, "free_coins_added_to_wallet")
+	assert_eq(soc.claim_free_offer("free_coins").is_empty(), true, "free_gift_only_once_per_day")
+	var xp_before: int = soc.season_xp
+	soc.claim_free_offer("free_xp")
+	assert_eq(soc.season_xp, xp_before + 50, "free_xp_gift_feeds_the_pass")
+
+	# The featured skin sells at the discounted price, only as today's offer.
+	var day_skin: String = str(offers["skin_id"])
+	var wallet: int = soc.coins
+	assert_eq(bool(soc.buy_skin(day_skin, true)["ok"]), true, "daily_skin_bought_at_discount")
+	assert_eq(soc.coins, wallet - int(offers["skin_price"]), "discounted_price_charged")
+	var other: String = "stella" if day_skin != "stella" else "cromo"
+	assert_eq(str(soc.buy_skin(other, true)["reason"]), "not_for_sale", "discount_only_applies_to_todays_skin")
+
+	# Act: midnight passes.
+	clock[0] += 18.0 * 3600.0 + 5.0
+
+	# Assert
+	assert_eq(soc.is_free_offer_claimed("free_coins"), false, "free_gifts_reset_the_next_day")
+	assert_true(str(soc.get_daily_offers()["skin_id"]) != day_skin, "featured_skin_changes_the_next_day")
+	assert_eq(soc.shop_day, 20001, "shop_day_rolled_over")
+	soc.free()
+	return true
+
+func test_real_money_products_need_the_purchase_gateway() -> bool:
+	# Arrange: store not connected (what a release build reports today).
+	var soc: SocialManager = _make_economy_profile()
+	soc.purchase_gateway.sandbox_enabled = false
+	var start: int = soc.coins
+
+	# Act / Assert
+	assert_eq(str(soc.purchase_coin_pack("coins_100")["reason"]), "unavailable", "coin_pack_refused_without_a_store")
+	assert_eq(soc.coins, start, "no_coins_granted_without_a_purchase")
+	assert_eq(str(soc.purchase_plus()["reason"]), "unavailable", "plus_refused_without_a_store")
+	assert_eq(soc.has_premium_pass, false, "plus_not_granted_without_a_purchase")
+
+	# Sandbox on (debug builds): the flow completes.
+	soc.purchase_gateway.sandbox_enabled = true
+	assert_eq(int(soc.purchase_coin_pack("coins_100")["coins"]), 100, "sandbox_coin_pack_grants_coins")
+	assert_eq(soc.coins, start + 100, "pack_coins_in_wallet")
+	assert_eq(str(soc.purchase_coin_pack("coins_fake")["reason"]), "unknown", "unknown_pack_refused")
+	assert_eq(bool(soc.purchase_plus()["ok"]), true, "sandbox_plus_purchase_succeeds")
+	assert_eq(soc.has_premium_pass, true, "plus_active_after_purchase")
+	assert_eq(str(soc.purchase_plus()["reason"]), "owned", "plus_cannot_be_bought_twice")
+	soc.free()
+	return true
+
+func test_season_pass_tiers_grant_rewards_and_pay_back_duplicates() -> bool:
+	# Arrange: default profile sits at level 34.
+	var soc: SocialManager = _make_economy_profile()
+	soc.claimed_free_tiers.clear()
+	soc.claimed_paid_tiers.clear()
+	var coins: int = soc.coins
+
+	# Act / Assert: coins tier
+	var t1: Dictionary = soc.claim_pass_tier_reward(1, false)
+	assert_eq(str(t1.get("type", "")), "coins", "tier_1_free_is_coins")
+	assert_eq(soc.coins, coins + int(t1["amount"]), "tier_coins_reach_the_wallet")
+	assert_eq(soc.claim_pass_tier_reward(1, false).is_empty(), true, "tier_cannot_be_claimed_twice")
+
+	# Skin tier.
+	var t5: Dictionary = soc.claim_pass_tier_reward(5, false)
+	assert_eq(str(t5.get("id", "")), "sceriffo", "tier_5_free_is_the_sheriff_skin")
+	assert_eq(soc.owns_skin("sceriffo"), true, "pass_skin_unlocked")
+
+	# Colour tier.
+	var t8: Dictionary = soc.claim_pass_tier_reward(8, false)
+	assert_eq(str(t8.get("type", "")), "color", "tier_8_free_is_a_colour")
+	assert_eq(soc.is_color_unlocked(Color(str(t8["id"]))), true, "pass_colour_unlocked")
+
+	# Paid side needs Splice Plus.
+	assert_eq(soc.claim_pass_tier_reward(1, true).is_empty(), true, "paid_tier_locked_without_plus")
+	soc.activate_premium_pass()
+	assert_eq(str(soc.claim_pass_tier_reward(1, true).get("id", "")), "neon", "paid_tier_1_is_the_neon_skin")
+
+	# Out of range and not-yet-reached tiers.
+	assert_eq(soc.claim_pass_tier_reward(0, false).is_empty(), true, "tier_zero_refused")
+	assert_eq(soc.claim_pass_tier_reward(35, false).is_empty(), true, "unreached_tier_refused")
+	assert_eq(soc.claim_pass_tier_reward(99, false).is_empty(), true, "tier_past_the_end_refused")
+
+	# A skin already owned turns into coins instead of being wasted.
+	soc.unlock_skin("agente")
+	var before_dup: int = soc.coins
+	var t20: Dictionary = soc.claim_pass_tier_reward(20, false)
+	assert_eq(bool(t20.get("duplicate", false)), true, "owned_skin_reward_flagged_duplicate")
+	assert_eq(soc.coins, before_dup + int(t20["compensation"]), "duplicate_pays_coins_back")
+
+	# First claimable and claim-all.
+	assert_eq(soc.get_first_claimable_tier(), 2, "first_claimable_is_the_lowest_open_tier")
+	var open_before: int = soc.get_claimable_pass_count()
+	var grants: Array[Dictionary] = soc.claim_all_pass_tiers()
+	assert_eq(grants.size(), open_before, "claim_all_takes_every_open_reward")
+	assert_eq(soc.get_claimable_pass_count(), 0, "nothing_left_after_claim_all")
+	assert_eq(soc.get_first_claimable_tier(), 0, "no_first_claimable_when_empty")
+
+	# The last tier is a hard cap.
+	var prog: Dictionary = soc.add_season_xp(900 * 100)
+	assert_eq(soc.season_level, EconomyCatalog.SEASON_TIER_COUNT, "level_capped_at_last_tier")
+	assert_true(soc.season_xp <= soc.season_xp_max, "xp_capped_at_the_end")
+	assert_eq(int(prog["levels_gained"]), EconomyCatalog.SEASON_TIER_COUNT - 34, "levels_gained_reported")
+	soc.free()
+	return true
+
+func test_reward_track_is_cosmetic_only_and_every_skin_is_reachable() -> bool:
+	# Arrange
+	var reachable: Dictionary = { EconomyCatalog.DEFAULT_SKIN_ID: true }
+	for s: Dictionary in EconomyCatalog.get_shop_skins():
+		reachable[str(s["id"])] = true
+
+	# Act / Assert: all 40 tiers on both tracks hand out only coins, skins or colours.
+	var free_total: int = 0
+	var paid_total: int = 0
+	for tier: int in range(1, EconomyCatalog.SEASON_TIER_COUNT + 1):
+		for paid: bool in [false, true]:
+			var r: Dictionary = EconomyCatalog.get_tier_reward(tier, paid)
+			var kind: String = str(r.get("type", ""))
+			assert_true(kind in ["coins", "skin", "color"], "tier_%d_%s_reward_is_cosmetic" % [tier, "paid" if paid else "free"])
+			if kind == "skin":
+				assert_true(EconomyCatalog.has_skin(str(r["id"])), "tier_%d_skin_exists" % tier)
+				assert_eq(int(EconomyCatalog.get_skin(str(r["id"]))["price"]), 0, "pass_skin_%s_not_also_sold" % str(r["id"]))
+				reachable[str(r["id"])] = true
+			elif kind == "coins":
+				assert_true(int(r["amount"]) > 0, "tier_%d_coins_positive" % tier)
+				if paid:
+					paid_total += int(r["amount"])
+				else:
+					free_total += int(r["amount"])
+	assert_true(paid_total > free_total, "plus_track_pays_more_coins_than_free")
+	for s: Dictionary in EconomyCatalog.SKINS:
+		assert_true(reachable.has(str(s["id"])), "skin_%s_can_be_obtained" % str(s["id"]))
+	assert_eq(EconomyCatalog.get_tier_reward(0, false).is_empty(), true, "no_reward_before_tier_1")
+	assert_eq(EconomyCatalog.get_tier_reward(41, true).is_empty(), true, "no_reward_after_the_last_tier")
+	return true
+
+func test_match_rewards_feed_season_xp_and_result_screen() -> bool:
+	# Arrange
+	var balance_cfg: BalanceConfig = load("res://shared/default_balance.tres")
+	var soc: SocialManager = _make_economy_profile()
+	soc.season_level = 10
+	soc.season_xp = 800
+	var coins: int = soc.coins
+
+	# Act: a win with 3 KOs, 4 stolen parts and the Abomination.
+	var rewards: Dictionary = MatchRewards.compute(balance_cfg, 1, 3, 4, true)
+	var expected_xp: int = balance_cfg.reward_xp_match + 3 * balance_cfg.reward_xp_per_kill + 4 * balance_cfg.reward_xp_per_stolen_part + balance_cfg.reward_xp_abomination + balance_cfg.reward_xp_win
+	var summary: Dictionary = soc.grant_match_rewards(rewards)
+
+	# Assert
+	assert_eq(int(rewards["xp"]), expected_xp, "match_xp_is_the_sum_of_its_lines")
+	assert_eq((rewards["lines"] as Array).size(), 5, "one_line_per_reward_source")
+	assert_eq(soc.coins, coins + int(rewards["coins"]), "match_coins_paid")
+	assert_eq(int(summary["level_before"]), 10, "summary_keeps_level_before")
+	assert_eq(soc.season_level, 11, "match_xp_levels_the_pass_up")
+	assert_eq(soc.season_xp, 800 + expected_xp - 900, "leftover_xp_carries_over")
+	assert_true(int(summary["claimable"]) > 0, "summary_counts_rewards_to_claim")
+	var last_place: Dictionary = MatchRewards.compute(balance_cfg, 12, 0, 0, false)
+	assert_eq(int(last_place["xp"]), balance_cfg.reward_xp_match, "last_place_still_earns_the_base_xp")
+	assert_true(int(MatchRewards.compute(balance_cfg, 2, 0, 0, false)["xp"]) > int(last_place["xp"]), "podium_pays_more_than_last_place")
+
+	# The result screen animates the bar from before to after.
+	var hud := VerticalHUD.new()
+	root.add_child(hud)
+	hud.show_match_rewards(summary, soc.season_xp_max)
+	var p_start: float = hud.get_rewards_shown_progress()
+	hud._rewards_age = 10.0
+	var p_end: float = hud.get_rewards_shown_progress()
+	assert_true(is_equal_approx(p_start, 10.0 + 800.0 / 900.0), "result_bar_starts_where_the_pass_was")
+	assert_true(is_equal_approx(p_end, 11.0 + float(soc.season_xp) / 900.0), "result_bar_ends_where_the_pass_is")
+	hud.on_match_restarted()
+	assert_eq(hud.match_rewards.is_empty(), true, "rewards_card_cleared_on_rematch")
+	hud.free()
+	soc.free()
+	return true
+
+func test_save_v1_migrates_to_v2_and_round_trips_economy() -> bool:
+	# Arrange: a save written before the economy existed.
+	var v1: Dictionary = { "version": 1, "player_username": "Vecchio", "season_level": 20, "season_xp": 300, "claimed_free_tiers": [1, 2], "claimed_paid_tiers": [] }
+	var soc: SocialManager = _make_economy_profile()
+
+	# Act
+	var ok: bool = soc.apply_state(v1)
+
+	# Assert: progress kept, wallet and wardrobe started.
+	assert_eq(ok, true, "v1_save_loads")
+	assert_eq(soc.player_username, "Vecchio", "v1_progress_kept")
+	assert_eq(soc.season_level, 20, "v1_season_level_kept")
+	assert_eq(soc.coins, SocialManager.STARTING_COINS, "v1_save_gets_a_starting_wallet")
+	assert_eq(soc.owned_skins, [EconomyCatalog.DEFAULT_SKIN_ID] as Array[String], "v1_save_gets_the_default_skin")
+	assert_eq(int(SocialManager.migrate_state(v1)["version"]), SocialManager.SAVE_VERSION, "migration_stamps_current_version")
+	assert_eq(soc.apply_state({ "version": 99 }), false, "newer_save_is_refused")
+	assert_eq(soc.apply_state({ "version": 2, "coins": -50, "owned_skins": ["ghost_skin"], "equipped_skin": "ghost_skin", "season_level": 500 }), true, "odd_v2_save_loads")
+	assert_eq(soc.coins, 0, "negative_coins_clamped")
+	assert_eq(soc.equipped_skin, EconomyCatalog.DEFAULT_SKIN_ID, "unknown_equipped_skin_falls_back")
+	assert_eq(soc.season_level, EconomyCatalog.SEASON_TIER_COUNT, "level_clamped_to_the_track")
+	soc.free()
+
+	# Round trip through a real file.
+	var tmp_save := "user://test_economy_save.json"
+	for leftover: String in [tmp_save, tmp_save + ".bak"]:
+		if FileAccess.file_exists(leftover):
+			DirAccess.remove_absolute(leftover)
+	var a := SocialManager.new(tmp_save)
+	a.persistence_enabled = true
+	a.now_provider = func() -> float: return 20000.0 * 86400.0
+	a.buy_skin("stella")
+	a.equip_skin("stella")
+	a.claim_free_offer("free_coins")
+	var saved_coins: int = a.coins
+	a.free()
+	var b := SocialManager.new(tmp_save)
+	b.now_provider = func() -> float: return 20000.0 * 86400.0
+	assert_eq(b.load_state(), true, "economy_save_loads")
+	assert_eq(b.coins, saved_coins, "coins_survive_a_restart")
+	assert_eq(b.equipped_skin, "stella", "equipped_skin_survives_a_restart")
+	assert_eq(b.is_free_offer_claimed("free_coins"), true, "claimed_gift_survives_a_restart")
+	b.free()
+	for leftover: String in [tmp_save, tmp_save + ".bak"]:
+		if FileAccess.file_exists(leftover):
+			DirAccess.remove_absolute(leftover)
+	return true
+
+func test_fighter_wears_skin_model_and_palette() -> bool:
+	# Arrange
+	var fighter := BlockyFighter3D.new()
+	root.add_child(fighter)
+	fighter.setup_fighter(0, false, Color(0.5, 0.12, 0.88), 0, {}, false)
+	var lava: Dictionary = EconomyCatalog.get_skin("lava")
+
+	# Act
+	fighter.apply_skin(lava)
+
+	# Assert: model swapped, outfit recoloured in the skin's two tones, skin left alone.
+	assert_eq(int(fighter.character_model_type), int(BlockyFighter3D.CharacterModelType.MAN_OFFICER), "skin_swaps_the_character_model")
+	assert_eq(fighter.skin_id, "lava", "skin_id_recorded")
+	var primary := Color(str(lava["primary"]))
+	var secondary := Color(str(lava["secondary"]))
+	var tinted: int = 0
+	var off_palette: int = 0
+	for child: Node in fighter.skeleton.get_children():
+		if child is MeshInstance3D:
+			var mi: MeshInstance3D = child as MeshInstance3D
+			for s_i: int in range(mi.mesh.get_surface_count()):
+				var orig: Material = mi.mesh.surface_get_material(s_i)
+				var m_name: String = orig.resource_name if orig != null else ""
+				if m_name.find("EYE") != -1 or m_name.find("Material.038") != -1 or m_name.find("Material.064") != -1 or m_name.find("Material.326") != -1:
+					continue
+				var col: Color = (mi.get_surface_override_material(s_i) as ShaderMaterial).get_shader_parameter("base_color") as Color
+				if col.is_equal_approx(primary) or col.is_equal_approx(secondary):
+					tinted += 1
+				else:
+					off_palette += 1
+	assert_true(tinted > 0, "outfit_surfaces_take_the_skin_palette")
+	assert_eq(off_palette, 0, "every_cloth_surface_is_on_palette")
+	assert_true(is_equal_approx(fighter.get_limb_tint_amount(), 1.0), "loose_limbs_follow_the_skin")
+	assert_true(fighter.get_limb_tint_color().is_equal_approx(primary), "loose_limbs_use_the_primary_colour")
+	assert_true(fighter.current_slots.size() == 4, "slots_survive_the_skin_change")
+
+	# Act: back to the default skin.
+	fighter.apply_skin(EconomyCatalog.get_skin("pinguino"))
+
+	# Assert
+	assert_eq(int(fighter.character_model_type), int(BlockyFighter3D.CharacterModelType.MAN_CUTIE), "default_skin_restores_the_model")
+	assert_true(is_equal_approx(fighter.get_limb_tint_amount(), 0.0), "default_skin_keeps_original_colours")
+	fighter.free()
+	return true
+
+func test_shop_and_pass_screens_scroll_claim_and_celebrate() -> bool:
+	# Arrange
+	var soc: SocialManager = _make_economy_profile()
+	soc.now_provider = func() -> float: return 20000.0 * 86400.0
+	soc.claimed_free_tiers.clear()
+	soc.claimed_paid_tiers.clear()
+	var shop := ShopScreen.new()
+	shop.social = soc
+	root.add_child(shop)
+
+	# Act: open and scroll.
+	shop.open()
+	assert_eq(shop.is_open, true, "shop_opens")
+	assert_true(shop.content_height > shop.scroll_area.size.y, "shop_content_is_taller_than_the_screen")
+	shop.scroll_to(999999.0, false)
+	assert_true(is_equal_approx(shop.scroll_y, shop.max_scroll()), "scroll_is_clamped_to_the_content")
+	shop.scroll_to(0.0, false)
+
+	# A drag scrolls, a tap does not.
+	shop._begin_pointer(Vector2(270.0, 600.0))
+	shop._move_pointer(Vector2(270.0, 520.0), Vector2(0.0, -80.0))
+	shop._end_pointer(Vector2(270.0, 520.0))
+	assert_true(shop.scroll_y > 40.0, "dragging_up_scrolls_the_page_down")
+
+	# Free gift: coins fly to the wallet.
+	var coins: int = soc.coins
+	shop._activate("free", "free_coins", Vector2(150.0, 700.0))
+	assert_eq(soc.coins, coins + 10, "free_gift_claimed_from_the_shop")
+	assert_true(shop._flying.size() >= 3, "coins_fly_to_the_wallet")
+
+	# Buying asks first, then celebrates.
+	shop._activate("buy", "stella", Vector2(270.0, 500.0))
+	assert_eq(str(shop._confirm.get("id", "")), "stella", "coin_purchase_asks_for_confirmation")
+	assert_eq(soc.owns_skin("stella"), false, "nothing_bought_before_confirming")
+	shop._run_confirmed()
+	assert_eq(soc.owns_skin("stella"), true, "confirmed_purchase_unlocks_the_skin")
+	assert_eq(shop._popup.active, true, "new_skin_popup_shown")
+	assert_eq(shop._popup.handle_tap(Vector2(-10.0, -10.0)), "", "popup_ignores_taps_while_it_pops_in")
+	shop._popup.update(1.0)
+	shop._popup.draw(shop, Vector2(540.0, 960.0), null, true)
+	assert_eq(shop._popup.handle_tap(shop._popup._equip_rect.get_center()), "equip", "popup_offers_to_equip_the_new_skin")
+
+	# Not enough coins: refused with a shake, nothing unlocked.
+	soc.coins = 5
+	shop._activate("buy", "cromo", Vector2(270.0, 500.0))
+	shop._run_confirmed()
+	assert_eq(soc.owns_skin("cromo"), false, "cannot_buy_without_coins")
+	assert_true(shop._pill_shake > 0.0, "wallet_shakes_when_short_of_coins")
+
+	# Real money with no store: the dialog says so and has no buy button.
+	soc.purchase_gateway.sandbox_enabled = false
+	shop._activate("pack", "coins_100", Vector2(270.0, 400.0))
+	assert_eq(bool(shop._confirm.get("offline", false)), true, "offline_store_is_stated_honestly")
+	shop._confirm.clear()
+	shop.close()
+	assert_eq(shop.is_open, false, "shop_closes")
+
+	# Season Pass: opens on the first reward to claim.
+	var pass_modal := SeasonPassModal.new()
+	pass_modal.social = soc
+	root.add_child(pass_modal)
+	pass_modal.open(SeasonPassModal.TAB_REWARDS)
+	assert_eq(pass_modal.get_focus_tier(), 1, "pass_focuses_the_first_claimable_tier")
+	assert_true(pass_modal.is_scroll_animating(), "pass_glides_to_the_focus_row")
+	assert_true(pass_modal.content_height >= float(EconomyCatalog.SEASON_TIER_COUNT) * SeasonPassModal.ROW_H, "pass_track_holds_all_tiers")
+
+	# Claiming one tier plays its effect; a skin reward queues the reveal popup.
+	var before: int = soc.coins
+	var got: Dictionary = pass_modal.claim_tier(1, false, Vector2(100.0, 400.0))
+	assert_eq(str(got.get("type", "")), "coins", "pass_claim_grants_the_reward")
+	assert_true(soc.coins > before, "pass_claim_pays_coins")
+	assert_true(pass_modal._claim_fx.has("1:0"), "claimed_card_plays_its_effect")
+	assert_true(pass_modal._flying.size() > 0, "claimed_coins_fly_to_the_wallet")
+	pass_modal.claim_tier(5, false, Vector2(100.0, 400.0))
+	assert_eq(pass_modal._popup_queue.size(), 1, "skin_reward_queues_a_reveal")
+	assert_eq(pass_modal.get_focus_tier(), 2, "focus_moves_to_the_next_claimable_tier")
+
+	# Claim everything, then the jump button points at the current level.
+	var all: Array[Dictionary] = pass_modal.claim_all(Vector2(400.0, 900.0))
+	assert_true(all.size() >= 30, "claim_all_takes_the_whole_backlog")
+	assert_eq(pass_modal.get_focus_tier(), soc.season_level, "with_nothing_to_claim_focus_is_the_current_level")
+
+	# XP from the last match pours into the bar when the pass opens.
+	pass_modal.close()
+	soc.season_level = 12
+	soc.season_xp = 100
+	soc.grant_match_rewards({ "xp": 1000, "coins": 0, "lines": [] })
+	pass_modal.open(SeasonPassModal.TAB_REWARDS)
+	assert_true(is_equal_approx(pass_modal._shown_progress, 12.0 + 100.0 / 900.0), "pass_bar_starts_from_before_the_match")
+	pass_modal._update_screen(0.2)
+	assert_true(pass_modal._shown_progress > 12.0 + 100.0 / 900.0, "pass_bar_fills_toward_the_new_xp")
+	for _i: int in range(200):
+		pass_modal._update_screen(0.05)
+	assert_true(is_equal_approx(pass_modal._shown_progress, 13.0 + 200.0 / 900.0), "pass_bar_settles_on_the_real_progress")
+	assert_eq(pass_modal._level_up_level, 13, "level_up_celebrated_during_the_fill")
+	pass_modal.close()
+	pass_modal.open(SeasonPassModal.TAB_REWARDS)
+	assert_true(is_equal_approx(pass_modal._shown_progress, 13.0 + 200.0 / 900.0), "xp_animation_plays_only_once")
+	pass_modal.close()
+
+	pass_modal.free()
+	shop.free()
 	soc.free()
 	return true
