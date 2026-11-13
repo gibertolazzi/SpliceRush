@@ -413,8 +413,8 @@ func _setup_camera() -> void:
 	current_cam_yaw = 0.0
 	target_cam_yaw = 0.0
 	if is_customizing:
-		camera.position = Vector3(0.0, 1.25, 3.45)
-		camera.rotation_degrees = Vector3(-7.0, 0.0, 0.0)
+		camera.position = Vector3(0.0, 1.78, 4.35)
+		camera.rotation_degrees = Vector3(-14.5, 0.0, 0.0)
 	else:
 		var start_z: float = 14.0 + balance.camera_z_bias
 		camera.position = Vector3(0.0, balance.camera_distance, start_z)
@@ -624,6 +624,7 @@ func _setup_ui() -> void:
 
 	customization_menu = CustomizationMenuScript.new()
 	customization_menu.name = "CustomizationMenu"
+	customization_menu.sound_controller = sound_controller
 	customization_menu.visible = is_customizing
 	customization_menu.part_selected.connect(_on_custom_part_selected)
 	customization_menu.color_selected.connect(_on_custom_color_selected)
@@ -1197,8 +1198,8 @@ func _on_hud_customize_requested() -> void:
 	current_cam_yaw = 0.0
 	target_cam_yaw = 0.0
 	camera.fov = balance.camera_fov_deg
-	camera.position = Vector3(0.0, 1.25, 3.45)
-	camera.rotation_degrees = Vector3(-7.0, 0.0, 0.0)
+	camera.position = Vector3(0.0, 1.78, 4.35)
+	camera.rotation_degrees = Vector3(-14.5, 0.0, 0.0)
 	if not fighter_nodes.is_empty():
 		fighter_nodes[0].visible = true
 		fighter_nodes[0].position = Vector3.ZERO
@@ -1240,8 +1241,9 @@ func _setup_customization_stage() -> void:
 	ped_top.mesh = top_cyl
 	ped_top.position = Vector3(0.0, -0.06, 0.0)
 	var top_mat := StandardMaterial3D.new()
-	top_mat.albedo_color = Color(0.18, 0.14, 0.30)
-	top_mat.roughness = 0.60
+	top_mat.albedo_color = Color(0.36, 0.28, 0.65)
+	top_mat.roughness = 0.88
+	top_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 	ped_top.material_override = top_mat
 	customize_stage_root.add_child(ped_top)
 
@@ -1249,18 +1251,19 @@ func _setup_customization_stage() -> void:
 	var rim_outer := MeshInstance3D.new()
 	rim_outer.name = "RimOuter"
 	var torus_mesh := TorusMesh.new()
-	torus_mesh.inner_radius = 1.46
+	torus_mesh.inner_radius = 1.44
 	torus_mesh.outer_radius = 1.54
 	rim_outer.mesh = torus_mesh
 	rim_outer.position = Vector3(0.0, 0.02, 0.0)
 	var rim_mat := StandardMaterial3D.new()
 	rim_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	rim_mat.albedo_color = Color(1.0, 0.78, 0.15) # Gold neon rim
+	rim_mat.albedo_color = Color(0.95, 0.88, 0.12) # Bright yellow rim
 	rim_outer.material_override = rim_mat
 	customize_stage_root.add_child(rim_outer)
 
 	var rim_inner := MeshInstance3D.new()
 	rim_inner.name = "RimInner"
+	rim_inner.visible = false
 	var torus_inner := TorusMesh.new()
 	torus_inner.inner_radius = 0.88
 	torus_inner.outer_radius = 0.92
@@ -1278,7 +1281,7 @@ func _setup_customization_stage() -> void:
 	customize_spotlight.position = Vector3(0.0, 4.4, 1.8)
 	customize_spotlight.rotation_degrees = Vector3(-62.0, 0.0, 0.0)
 	customize_spotlight.light_color = Color(1.0, 0.96, 0.90)
-	customize_spotlight.light_energy = 3.6
+	customize_spotlight.light_energy = 2.1
 	customize_spotlight.spot_range = 10.0
 	customize_spotlight.spot_angle = 38.0
 	customize_stage_root.add_child(customize_spotlight)

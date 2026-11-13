@@ -7,6 +7,15 @@ signal play_pressed(slots: Dictionary, color: Color)
 signal hero_rotated(delta_x: float)
 
 const LOGO_TEX: Texture2D = preload("res://game/ui/assets/logo.svg")
+const CUP_TEX: Texture2D = preload("res://game/ui/assets/cup.svg")
+const SHOP_TEX: Texture2D = preload("res://game/ui/assets/shop.svg")
+const SKIN_TEX: Texture2D = preload("res://game/ui/assets/skin.svg")
+const FRIENDS_TEX: Texture2D = preload("res://game/ui/assets/friends.svg")
+const TASK_TEX: Texture2D = preload("res://game/ui/assets/task.svg")
+const CHEST_TEX: Texture2D = preload("res://game/ui/assets/chest.svg")
+const CROWN_TEX: Texture2D = preload("res://game/ui/assets/crown.svg")
+
+const InGameSettingsModalScript := preload("res://game/ui/in_game_settings_modal.gd")
 const FONT_REGULAR := preload("res://game/ui/fonts/LondrinaSolid-Regular.ttf")
 const FONT_BOLD := preload("res://game/ui/fonts/LondrinaSolid-Black.ttf")
 
@@ -15,6 +24,12 @@ const TAB_ARMS: int = 1
 const TAB_LEGS: int = 2
 const TAB_CORE: int = 3
 const TAB_COLOR: int = 4
+
+const SLATE_BG := Color(0.149, 0.176, 0.259, 0.96)
+const SLATE_BEVEL := Color(0.098, 0.118, 0.176, 1.0)
+const DARK_BORDER := Color(0.063, 0.075, 0.118, 1.0)
+const GOLD_FILL := Color(0.941, 0.745, 0.094, 1.0)
+const GOLD_BEVEL := Color(0.765, 0.565, 0.047, 1.0)
 
 var current_tab: int = 0
 var equipped_slots: Dictionary = {
@@ -28,16 +43,46 @@ var equipped_color: Color = Color.WHITE
 var selected_part_id: StringName = &"base_head"
 var selected_color: Color = Color.WHITE
 
+var player_name: String = "Pinguino"
+var trophies: int = 2805
+var season_number: int = 1
+var season_level: int = 34
+var season_xp: int = 435
+var season_xp_max: int = 900
+var season_badge_count: int = 7
+var is_appearance_open: bool = false
+
+var sound_controller: SoundController = null:
+	set(val):
+		sound_controller = val
+		if settings_modal != null:
+			settings_modal.sound_controller = val
+
+var settings_modal: Control = null
+
 var is_loading: bool = false
 var loading_progress: float = 0.0
 var _loading_timer: float = 0.0
 
 var _pulse_timer: float = 0.0
 var _is_dragging: bool = false
+var _drag_touch_idx: int = -1
+var _last_drag_x: float = 0.0
+var _toast_text: String = ""
+var _toast_timer: float = 0.0
+
 var _tab_rects: Array[Rect2] = []
 var _option_rects: Array[Dictionary] = [] # { rect: Rect2, data: Variant }
 var _equip_btn_rect: Rect2 = Rect2()
 var _play_btn_rect: Rect2 = Rect2()
+var _hamburger_rect: Rect2 = Rect2()
+var _shop_btn_rect: Rect2 = Rect2()
+var _skin_btn_rect: Rect2 = Rect2()
+var _friends_btn_rect: Rect2 = Rect2()
+var _task_btn_rect: Rect2 = Rect2()
+var _season_btn_rect: Rect2 = Rect2()
+var _mode_btn_rect: Rect2 = Rect2()
+var _drawer_close_rect: Rect2 = Rect2()
 
 const COLOR_OPTIONS: Array[Dictionary] = [
 	{ "name": "Blu Reale", "color": Color.WHITE, "badge_col": Color(0.18, 0.44, 0.98) },
@@ -48,16 +93,21 @@ const COLOR_OPTIONS: Array[Dictionary] = [
 ]
 
 func _ready() -> void:
-	anchor_left = 0.0
-	anchor_top = 0.0
-	anchor_right = 1.0
-	anchor_bottom = 1.0
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = MOUSE_FILTER_PASS
 	selected_part_id = equipped_slots.get(PartData.Slot.HEAD, &"base_head") as StringName
 	selected_color = equipped_color
 
+	settings_modal = InGameSettingsModalScript.new()
+	settings_modal.name = "HomeSettingsModal"
+	settings_modal.sound_controller = sound_controller
+	settings_modal.visible = false
+	add_child(settings_modal)
+
 func _process(delta: float) -> void:
 	_pulse_timer += delta * 4.0
+	if _toast_timer > 0.0:
+		_toast_timer = maxf(0.0, _toast_timer - delta)
 	if is_loading:
 		_loading_timer += delta
 		loading_progress = clampf(_loading_timer / 1.10, 0.0, 1.0)
@@ -66,53 +116,96 @@ func _process(delta: float) -> void:
 			play_pressed.emit(equipped_slots, equipped_color)
 	queue_redraw()
 
-func _gui_input(event: InputEvent) -> void:
-	if is_loading:
+func _input(event: InputEvent) -> void:
+	if not is_visible_in_tree() or is_loading:
+		return
+	if settings_modal != null and settings_modal.is_open:
 		return
 
-	if event is InputEventMouseButton:
-		var mb: InputEventMouseButton = event
+	if event is InputEventScreenTouch:
+		var st: InputEventScreenTouch = event as InputEventScreenTouch
+		if st.pressed:
+			if _handle_press_at(st.position, st.index):
+				get_viewport().set_input_as_handled()
+		elif st.index == _drag_touch_idx:
+			_is_dragging = false
+			_drag_touch_idx = -1
+	elif event is InputEventScreenDrag and _is_dragging:
+		var sd: InputEventScreenDrag = event as InputEventScreenDrag
+		if sd.index == _drag_touch_idx:
+			hero_rotated.emit(sd.relative.x)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton:
+		var mb: InputEventMouseButton = event as InputEventMouseButton
+		if mb.device == InputEvent.DEVICE_ID_EMULATION:
+			return
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
-				# 1. Play button
-				if _play_btn_rect.has_point(mb.position):
-					_commit_preview_selection()
-					start_loading_flow()
-					accept_event()
-					return
-
-				# 2. Category Tabs
-				for t_i: int in range(_tab_rects.size()):
-					if _tab_rects[t_i].has_point(mb.position):
-						_switch_tab(t_i)
-						accept_event()
-						return
-
-				# 3. Equip Button in Detail Card
-				if not _equip_btn_rect.has_area() == false and _equip_btn_rect.has_point(mb.position):
-					_commit_preview_selection()
-					accept_event()
-					return
-
-				# 4. Item Options
-				for opt: Dictionary in _option_rects:
-					var r: Rect2 = opt["rect"] as Rect2
-					if r.has_point(mb.position):
-						_select_option(opt["data"])
-						accept_event()
-						return
-
-				# 5. Center drag area for 3D hero rotation (y: 120 to 520)
-				if mb.position.y >= 120.0 and mb.position.y <= 520.0:
-					_is_dragging = true
-					accept_event()
+				if _handle_press_at(mb.position, 0):
+					get_viewport().set_input_as_handled()
 			else:
 				_is_dragging = false
-
-	elif event is InputEventMouseMotion and _is_dragging:
-		var mm: InputEventMouseMotion = event
+				_drag_touch_idx = -1
+	elif event is InputEventMouseMotion and _is_dragging and _drag_touch_idx == 0:
+		var mm: InputEventMouseMotion = event as InputEventMouseMotion
+		if mm.device == InputEvent.DEVICE_ID_EMULATION:
+			return
 		hero_rotated.emit(mm.relative.x)
-		accept_event()
+		get_viewport().set_input_as_handled()
+
+func _handle_press_at(pos: Vector2, pointer_idx: int) -> bool:
+	if is_appearance_open:
+		if _drawer_close_rect.has_point(pos):
+			is_appearance_open = false
+			queue_redraw()
+			return true
+		if _play_btn_rect.has_point(pos):
+			_commit_preview_selection()
+			start_loading_flow()
+			return true
+		for t_i: int in range(_tab_rects.size()):
+			if _tab_rects[t_i].has_point(pos):
+				_switch_tab(t_i)
+				return true
+		if _equip_btn_rect.has_area() and _equip_btn_rect.has_point(pos):
+			_commit_preview_selection()
+			return true
+		for opt: Dictionary in _option_rects:
+			var r: Rect2 = opt["rect"] as Rect2
+			if r.has_point(pos):
+				_select_option(opt["data"])
+				return true
+		if pos.y >= 100.0 and pos.y <= 520.0:
+			_is_dragging = true
+			_drag_touch_idx = pointer_idx
+			_last_drag_x = pos.x
+			return true
+		return false
+
+	# Home screen interactions
+	if _hamburger_rect.has_point(pos):
+		if settings_modal != null:
+			settings_modal.open()
+		return true
+	if _play_btn_rect.has_point(pos):
+		_commit_preview_selection()
+		start_loading_flow()
+		return true
+	if _skin_btn_rect.has_point(pos):
+		is_appearance_open = true
+		queue_redraw()
+		return true
+	if _shop_btn_rect.has_point(pos) or _friends_btn_rect.has_point(pos) or _task_btn_rect.has_point(pos) or _season_btn_rect.has_point(pos) or _mode_btn_rect.has_point(pos):
+		_toast_text = tr(&"HOME_COMING_SOON")
+		_toast_timer = 1.6
+		queue_redraw()
+		return true
+	if pos.y >= 110.0 and pos.y <= 660.0:
+		_is_dragging = true
+		_drag_touch_idx = pointer_idx
+		_last_drag_x = pos.x
+		return true
+	return false
 
 func _switch_tab(tab_idx: int) -> void:
 	current_tab = tab_idx
@@ -120,7 +213,6 @@ func _switch_tab(tab_idx: int) -> void:
 		selected_color = equipped_color
 	else:
 		selected_part_id = equipped_slots.get(current_tab, &"base_head") as StringName
-		# Preview currently equipped on hero
 		part_selected.emit(current_tab, selected_part_id)
 
 func _select_option(data: Variant) -> void:
@@ -149,36 +241,249 @@ func _draw() -> void:
 	if sz.x <= 1.0 or sz.y <= 1.0:
 		sz = Vector2(540.0, 960.0)
 
+	if is_appearance_open:
+		_draw_appearance_drawer(sz)
+	else:
+		_draw_home_screen(sz)
+
+	if _toast_timer > 0.0 and _toast_text != "":
+		var tw: float = 230.0
+		var th: float = 36.0
+		var t_rect := Rect2((sz.x - tw) * 0.5, 94.0, tw, th)
+		_draw_brawl_box(t_rect, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 10.0, 2.0)
+		_draw_outlined_text(FONT_BOLD, Vector2(t_rect.position.x, t_rect.position.y + 24.0), _toast_text, HORIZONTAL_ALIGNMENT_CENTER, tw, 17, Color.WHITE, 2.0)
+
+	if is_loading:
+		_draw_loading_curtain(sz, GOLD_FILL, Color(1.0, 0.18, 0.58), Color(0.96, 0.96, 0.98))
+
+func _draw_home_screen(sz: Vector2) -> void:
+	var margin_x: float = 20.0
+	var top_y: float = 14.0
+
+	# 1. TOP BAR: Profile Pill (left) + Hamburger Button (right)
+	var ham_w: float = 82.0
+	var ham_h: float = 68.0
+	_hamburger_rect = Rect2(sz.x - margin_x - ham_w, top_y, ham_w, ham_h)
+
+	var prof_w: float = _hamburger_rect.position.x - margin_x - 16.0
+	var prof_rect := Rect2(margin_x, top_y, prof_w, ham_h)
+	_draw_brawl_box(prof_rect, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 14.0, 2.5)
+
+	# Avatar portrait box
+	var av_rect := Rect2(prof_rect.position.x + 9.0, prof_rect.position.y + 8.0, 52.0, 52.0)
+	_draw_hero_avatar(av_rect)
+
+	# Player name + Cup + Trophies
+	_draw_outlined_text(FONT_BOLD, Vector2(av_rect.end.x + 12.0, prof_rect.position.y + 33.0), player_name, HORIZONTAL_ALIGNMENT_LEFT, prof_w - 86.0, 24, Color.WHITE, 2.5)
+	if CUP_TEX != null:
+		draw_texture_rect(CUP_TEX, Rect2(av_rect.end.x + 12.0, prof_rect.position.y + 41.0, 20.0, 17.0), false)
+	_draw_outlined_text(FONT_BOLD, Vector2(av_rect.end.x + 37.0, prof_rect.position.y + 56.0), str(trophies), HORIZONTAL_ALIGNMENT_LEFT, 160.0, 19, Color(0.98, 0.78, 0.15), 2.0)
+
+	# Hamburger button
+	_draw_brawl_box(_hamburger_rect, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 14.0, 2.5)
+	var bar_w: float = 36.0
+	var bar_h: float = 5.5
+	var bar_x: float = _hamburger_rect.position.x + (_hamburger_rect.size.x - bar_w) * 0.5
+	var bar_y0: float = _hamburger_rect.position.y + 18.0
+	for b_i: int in range(3):
+		var bar_r := Rect2(bar_x, bar_y0 + float(b_i) * 12.0, bar_w, bar_h)
+		var bar_sb := StyleBoxFlat.new()
+		bar_sb.bg_color = Color.WHITE
+		bar_sb.set_corner_radius_all(3)
+		draw_style_box(bar_sb, bar_r)
+
+	# 2. SIDE ACTION BUTTONS (NEGOZIO, ASPETTO, AMICI, TASK)
+	var btn_w: float = 92.0
+	var btn_h: float = 82.0
+	var row1_y: float = 118.0
+	var row2_y: float = 212.0
+
+	_shop_btn_rect = Rect2(margin_x, row1_y, btn_w, btn_h)
+	_skin_btn_rect = Rect2(margin_x, row2_y, btn_w, btn_h)
+	_friends_btn_rect = Rect2(sz.x - margin_x - btn_w, row1_y, btn_w, btn_h)
+	_task_btn_rect = Rect2(sz.x - margin_x - btn_w, row2_y, btn_w, btn_h)
+
+	_draw_side_icon_btn(_shop_btn_rect, SHOP_TEX, Vector2(46.0, 32.0), tr(&"HOME_SHOP"))
+	_draw_side_icon_btn(_skin_btn_rect, SKIN_TEX, Vector2(46.0, 35.0), tr(&"HOME_APPEARANCE"))
+	_draw_side_icon_btn(_friends_btn_rect, FRIENDS_TEX, Vector2(54.0, 36.0), tr(&"HOME_FRIENDS"))
+	_draw_side_icon_btn(_task_btn_rect, TASK_TEX, Vector2(39.0, 39.0), tr(&"HOME_TASKS"))
+
+	# 3. BOTTOM CTA + MODE BAR + SEASON PASS CARD
+	var cta_h: float = 74.0
+	var cta_y: float = sz.y - 34.0 - cta_h
+	_play_btn_rect = Rect2(margin_x, cta_y, sz.x - margin_x * 2.0, cta_h)
+
+	var mode_h: float = 70.0
+	var mode_y: float = cta_y - 14.0 - mode_h
+	_mode_btn_rect = Rect2(margin_x, mode_y, sz.x - margin_x * 2.0, mode_h)
+
+	# Season Pass card (right side, above mode bar)
+	var sp_w: float = 248.0
+	var sp_h: float = 84.0
+	var sp_x: float = sz.x - margin_x - sp_w
+	var sp_y: float = mode_y - 16.0 - sp_h
+	_season_btn_rect = Rect2(sp_x, sp_y, sp_w, sp_h)
+	_draw_brawl_box(_season_btn_rect, GOLD_FILL, GOLD_BEVEL, DARK_BORDER, 13.0, 2.5)
+
+	# Season title
+	var season_str: String = tr(&"HOME_SEASON") % season_number
+	_draw_outlined_text(FONT_BOLD, Vector2(sp_x + 12.0, sp_y + 28.0), season_str, HORIZONTAL_ALIGNMENT_LEFT, 150.0, 20, Color.WHITE, 2.5)
+
+	# Progress bar
+	var pb_rect := Rect2(sp_x + 14.0, sp_y + 42.0, sp_w - 28.0, 26.0)
+	var track_sb := StyleBoxFlat.new()
+	track_sb.bg_color = Color(0.10, 0.12, 0.20, 1.0)
+	track_sb.set_corner_radius_all(11)
+	track_sb.set_border_width_all(2)
+	track_sb.border_color = DARK_BORDER
+	draw_style_box(track_sb, pb_rect)
+
+	var ratio: float = clampf(float(season_xp) / float(maxi(1, season_xp_max)), 0.0, 1.0)
+	var fill_w: float = maxf(0.0, (pb_rect.size.x - 4.0) * ratio)
+	if fill_w > 6.0:
+		var fill_pts := PackedVector2Array([
+			Vector2(pb_rect.position.x + 2.0, pb_rect.position.y + 2.0),
+			Vector2(pb_rect.position.x + 2.0 + fill_w, pb_rect.position.y + 2.0),
+			Vector2(pb_rect.position.x + 2.0 + fill_w, pb_rect.end.y - 2.0),
+			Vector2(pb_rect.position.x + 2.0, pb_rect.end.y - 2.0),
+		])
+		var fill_cols := PackedColorArray([
+			Color(1.0, 0.13, 0.56),
+			Color(1.0, 0.62, 0.10),
+			Color(1.0, 0.62, 0.10),
+			Color(1.0, 0.13, 0.56),
+		])
+		draw_polygon(fill_pts, fill_cols)
+
+	# Level badge circle on left end of progress bar
+	var lvl_c := Vector2(pb_rect.position.x + 11.0, pb_rect.position.y + pb_rect.size.y * 0.5)
+	draw_circle(lvl_c, 16.0, Color.WHITE)
+	draw_circle(lvl_c, 13.5, DARK_BORDER)
+	_draw_outlined_text(FONT_BOLD, Vector2(lvl_c.x - 14.0, lvl_c.y + 6.0), str(season_level), HORIZONTAL_ALIGNMENT_CENTER, 28.0, 16, Color.WHITE, 0.0)
+
+	# Progress text
+	var xp_str: String = "%d/%d" % [season_xp, season_xp_max]
+	_draw_outlined_text(FONT_BOLD, Vector2(pb_rect.position.x + 24.0, pb_rect.position.y + 19.0), xp_str, HORIZONTAL_ALIGNMENT_CENTER, pb_rect.size.x - 28.0, 17, Color.WHITE, 2.0)
+
+	# Chest overlapping top-right of Season card
+	if CHEST_TEX != null:
+		draw_texture_rect(CHEST_TEX, Rect2(sp_x + sp_w - 118.0, sp_y - 66.0, 124.0, 121.0), false)
+
+	# Red notification badge
+	if season_badge_count > 0:
+		var badge_c := Vector2(sp_x + sp_w - 20.0, sp_y - 16.0)
+		draw_circle(badge_c, 15.0, DARK_BORDER)
+		draw_circle(badge_c, 13.0, Color(0.93, 0.11, 0.14))
+		_draw_outlined_text(FONT_BOLD, Vector2(badge_c.x - 13.0, badge_c.y + 6.0), str(season_badge_count), HORIZONTAL_ALIGNMENT_CENTER, 26.0, 17, Color.WHITE, 1.5)
+
+	# Mode selector bar ("Sopravvivenza")
+	_draw_brawl_box(_mode_btn_rect, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 14.0, 2.5)
+	if CROWN_TEX != null:
+		draw_texture_rect(CROWN_TEX, Rect2(_mode_btn_rect.position.x + 22.0, _mode_btn_rect.position.y + 21.0, 33.0, 27.0), false)
+	_draw_outlined_text(FONT_BOLD, Vector2(_mode_btn_rect.position.x + 70.0, _mode_btn_rect.position.y + 45.0), tr(&"HOME_MODE_SURVIVAL"), HORIZONTAL_ALIGNMENT_LEFT, 320.0, 29, Color.WHITE, 2.5)
+
+	# Refresh / cycle arrows icon on right of mode bar
+	var cyc_c := Vector2(_mode_btn_rect.end.x - 40.0, _mode_btn_rect.position.y + _mode_btn_rect.size.y * 0.5)
+	_draw_cycle_icon(cyc_c, 14.0, Color.WHITE)
+
+	# Primary CTA button ("GIOCA ORA")
+	_draw_brawl_box(_play_btn_rect, GOLD_FILL, GOLD_BEVEL, DARK_BORDER, 14.0, 2.5)
+	_draw_outlined_text(FONT_BOLD, Vector2(_play_btn_rect.position.x, _play_btn_rect.position.y + 48.0), tr(&"HOME_PLAY_NOW"), HORIZONTAL_ALIGNMENT_CENTER, _play_btn_rect.size.x, 32, Color.WHITE, 3.0)
+
+func _draw_side_icon_btn(rect: Rect2, icon_tex: Texture2D, icon_sz: Vector2, label: String) -> void:
+	_draw_brawl_box(rect, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 14.0, 2.5)
+	if icon_tex != null:
+		var ix: float = rect.position.x + (rect.size.x - icon_sz.x) * 0.5
+		var iy: float = rect.position.y + 11.0 + (40.0 - icon_sz.y) * 0.5
+		draw_texture_rect(icon_tex, Rect2(ix, iy, icon_sz.x, icon_sz.y), false)
+	_draw_outlined_text(FONT_BOLD, Vector2(rect.position.x + 2.0, rect.end.y - 12.0), label, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x - 4.0, 14, Color.WHITE, 2.0)
+
+func _draw_brawl_box(rect: Rect2, fill: Color, bevel: Color, border: Color, radius: float, border_w: float) -> void:
+	var bevel_sb := StyleBoxFlat.new()
+	bevel_sb.bg_color = bevel
+	bevel_sb.set_corner_radius_all(int(radius))
+	bevel_sb.set_border_width_all(int(ceilf(border_w)))
+	bevel_sb.border_color = border
+	draw_style_box(bevel_sb, Rect2(rect.position.x, rect.position.y + 3.0, rect.size.x, rect.size.y))
+
+	var top_sb := StyleBoxFlat.new()
+	top_sb.bg_color = fill
+	top_sb.set_corner_radius_all(int(radius))
+	top_sb.set_border_width_all(int(ceilf(border_w)))
+	top_sb.border_color = border
+	draw_style_box(top_sb, rect)
+
+func _draw_outlined_text(font: Font, pos: Vector2, text: String, align: HorizontalAlignment, width: float, font_size: int, color: Color, outline_px: float) -> void:
+	if outline_px > 0.0:
+		var ol_col := DARK_BORDER
+		var offsets: Array[Vector2] = [
+			Vector2(-outline_px, 0.0), Vector2(outline_px, 0.0),
+			Vector2(0.0, -outline_px), Vector2(0.0, outline_px),
+			Vector2(-outline_px * 0.7, -outline_px * 0.7), Vector2(outline_px * 0.7, -outline_px * 0.7),
+			Vector2(-outline_px * 0.7, outline_px * 0.7), Vector2(outline_px * 0.7, outline_px * 0.7),
+		]
+		for off: Vector2 in offsets:
+			draw_string(font, pos + off, text, align, width, font_size, ol_col)
+		draw_string(font, pos + Vector2(0.0, outline_px + 1.0), text, align, width, font_size, ol_col)
+	draw_string(font, pos, text, align, width, font_size, color)
+
+func _draw_hero_avatar(rect: Rect2) -> void:
+	var bg_sb := StyleBoxFlat.new()
+	bg_sb.bg_color = Color(0.18, 0.09, 0.30, 1.0)
+	bg_sb.set_corner_radius_all(8)
+	bg_sb.set_border_width_all(2)
+	bg_sb.border_color = DARK_BORDER
+	draw_style_box(bg_sb, rect)
+
+	var c := rect.get_center()
+	draw_circle(c + Vector2(0.0, 2.0), 18.0, Color(0.45, 0.20, 0.72, 0.55))
+	# Shoulders / dark jacket
+	var body_pts := PackedVector2Array([
+		Vector2(rect.position.x + 7.0, rect.end.y - 3.0),
+		Vector2(rect.position.x + 12.0, c.y + 8.0),
+		Vector2(rect.end.x - 12.0, c.y + 8.0),
+		Vector2(rect.end.x - 7.0, rect.end.y - 3.0),
+	])
+	draw_colored_polygon(body_pts, Color(0.12, 0.11, 0.14))
+	# Face
+	draw_circle(c + Vector2(0.0, 1.0), 11.5, Color(0.96, 0.90, 0.87))
+	# Mohawk hair
+	var hair_pts := PackedVector2Array([
+		Vector2(c.x - 9.0, c.y - 5.0),
+		Vector2(c.x + 1.0, rect.position.y + 4.0),
+		Vector2(c.x + 9.0, c.y - 5.0),
+	])
+	draw_colored_polygon(hair_pts, Color(0.14, 0.12, 0.16))
+	# Eyes
+	draw_circle(c + Vector2(-4.0, 0.0), 2.1, Color(0.14, 0.12, 0.16))
+	draw_circle(c + Vector2(3.5, 0.0), 2.1, Color(0.14, 0.12, 0.16))
+
+func _draw_cycle_icon(center: Vector2, rad: float, col: Color) -> void:
+	draw_arc(center, rad, deg_to_rad(25.0), deg_to_rad(175.0), 16, col, 3.2, true)
+	draw_arc(center, rad, deg_to_rad(205.0), deg_to_rad(355.0), 16, col, 3.2, true)
+	var top_tip := center + Vector2(rad * 0.95, -2.0)
+	draw_colored_polygon(PackedVector2Array([top_tip + Vector2(-6.0, -5.0), top_tip + Vector2(4.0, -4.0), top_tip + Vector2(0.0, 5.0)]), col)
+	var bot_tip := center + Vector2(-rad * 0.95, 2.0)
+	draw_colored_polygon(PackedVector2Array([bot_tip + Vector2(6.0, 5.0), bot_tip + Vector2(-4.0, 4.0), bot_tip + Vector2(0.0, -5.0)]), col)
+
+func _draw_appearance_drawer(sz: Vector2) -> void:
 	var magenta := Color(1.0, 0.18, 0.58)
 	var gold := Color(1.0, 0.78, 0.15)
 	var white := Color(0.96, 0.96, 0.98)
 	var border_col := Color(0.32, 0.26, 0.52)
 	var panel_bg := Color(0.08, 0.06, 0.19, 0.95)
 
-	# 1. TOP HEADER (Logo + Title)
-	var header_rect := Rect2(16.0, 16.0, sz.x - 32.0, 96.0)
-	_draw_chamfer_box(header_rect, panel_bg, border_col, 8.0)
-	if LOGO_TEX != null:
-		var lw: float = 114.0
-		var lh: float = lw * (300.0 / 401.0)
-		draw_texture_rect(LOGO_TEX, Rect2(Vector2(26.0, 20.0), Vector2(lw, lh)), false)
-
-	var title_str: String = tr(&"MENU_CUSTOMIZE_TITLE")
-	draw_string(FONT_BOLD, Vector2(154.0, 60.0), title_str, HORIZONTAL_ALIGNMENT_LEFT, sz.x - 175.0, 24, gold)
-	var sub_str: String = tr(&"MENU_DRAG_HINT")
-	draw_string(FONT_REGULAR, Vector2(154.0, 88.0), sub_str, HORIZONTAL_ALIGNMENT_LEFT, sz.x - 175.0, 15, Color(0.82, 0.80, 0.94))
-
-	# 2. BOTTOM CUSTOMIZATION PANEL
 	var panel_y: float = clampf(sz.y - 425.0, 510.0, sz.y - 380.0)
 	var panel_h: float = sz.y - panel_y - 10.0
 	var bot_panel := Rect2(14.0, panel_y, sz.x - 28.0, panel_h)
 	_draw_chamfer_box(bot_panel, panel_bg, border_col, 10.0)
 
-	# ROTATION HINT OVERLAY (Discreetly above panel, clear of hero face)
-	var rot_hint := "« ↻ TRASCINA »"
-	draw_string(FONT_BOLD, Vector2(sz.x * 0.5 - 60.0, panel_y - 12.0), rot_hint, HORIZONTAL_ALIGNMENT_CENTER, 120.0, 15, Color(1.0, 0.78, 0.15, 0.65))
+	# Close drawer button
+	_drawer_close_rect = Rect2(bot_panel.end.x - 44.0, bot_panel.position.y - 42.0, 38.0, 34.0)
+	_draw_brawl_box(_drawer_close_rect, SLATE_BG, SLATE_BEVEL, DARK_BORDER, 9.0, 2.0)
+	_draw_outlined_text(FONT_BOLD, Vector2(_drawer_close_rect.position.x, _drawer_close_rect.position.y + 24.0), "✕", HORIZONTAL_ALIGNMENT_CENTER, 38.0, 18, Color.WHITE, 1.5)
 
-	# 4. CATEGORY TABS
+	# CATEGORY TABS
 	var tab_names := [tr(&"MENU_TAB_HEAD"), tr(&"MENU_TAB_ARMS"), tr(&"MENU_TAB_LEGS"), tr(&"MENU_TAB_CORE"), tr(&"MENU_TAB_COLOR")]
 	var tab_icons := ["👑", "🦾", "🦿", "🛡️", "🎨"]
 	_tab_rects.clear()
@@ -193,38 +498,22 @@ func _draw() -> void:
 		var tab_label := "%s %s" % [tab_icons[i], tab_names[i]]
 		draw_string(FONT_BOLD, Vector2(tr_rect.position.x, tr_rect.position.y + 25.0), tab_label, HORIZONTAL_ALIGNMENT_CENTER, tr_rect.size.x, 14, white)
 
-	# 5. OPTIONS ROW / GRID FOR CURRENT TAB (Point 6)
 	_option_rects.clear()
 	var opt_area_y: float = bot_panel.position.y + 52.0
 	_draw_options_for_tab(bot_panel, opt_area_y, gold, magenta, white, border_col)
 
-	# 6. SELECTED PART DETAIL CARD (Point 7)
 	var detail_y: float = opt_area_y + 112.0
 	var detail_h: float = 78.0
 	var detail_rect := Rect2(bot_panel.position.x + 8.0, detail_y, bot_panel.size.x - 16.0, detail_h)
 	_draw_detail_card(detail_rect, gold, magenta, white, border_col)
 
-	# 7. BIG CTA PLAY BUTTON
-	var pulse: float = 0.98 + 0.04 * sin(_pulse_timer)
 	var btn_w: float = bot_panel.size.x - 20.0
 	var btn_h: float = 58.0
 	var btn_x: float = bot_panel.position.x + 10.0
 	var btn_y: float = bot_panel.end.y - 70.0
 	_play_btn_rect = Rect2(btn_x, btn_y, btn_w, btn_h)
-
-	var draw_btn_rect := Rect2(
-		btn_x + btn_w * (1.0 - pulse) * 0.5,
-		btn_y + btn_h * (1.0 - pulse) * 0.5,
-		btn_w * pulse,
-		btn_h * pulse
-	)
-	_draw_chamfer_box(draw_btn_rect, magenta, gold, 10.0)
-	var play_label: String = "⚡ " + tr(&"MENU_PLAY_BUTTON") + " ⚡"
-	draw_string(FONT_BOLD, Vector2(draw_btn_rect.position.x, draw_btn_rect.position.y + 38.0), play_label, HORIZONTAL_ALIGNMENT_CENTER, draw_btn_rect.size.x, 24, white)
-
-	# 8. LOADING OVERLAY
-	if is_loading:
-		_draw_loading_curtain(sz, gold, magenta, white)
+	_draw_brawl_box(_play_btn_rect, GOLD_FILL, GOLD_BEVEL, DARK_BORDER, 12.0, 2.5)
+	_draw_outlined_text(FONT_BOLD, Vector2(_play_btn_rect.position.x, _play_btn_rect.position.y + 39.0), tr(&"HOME_PLAY_NOW"), HORIZONTAL_ALIGNMENT_CENTER, _play_btn_rect.size.x, 26, Color.WHITE, 2.5)
 
 func _draw_options_for_tab(panel: Rect2, start_y: float, gold: Color, magenta: Color, white: Color, border_col: Color) -> void:
 	if current_tab == TAB_COLOR:
