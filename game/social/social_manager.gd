@@ -12,7 +12,7 @@ signal wallet_changed()
 signal inventory_changed()
 
 const SAVE_VERSION: int = 2
-const STARTING_COINS: int = 1204
+const STARTING_COINS: int = EconomyCatalog.STARTING_COINS
 const SECONDS_PER_DAY: int = 86400
 const DEFAULT_SAVE_PATH: String = "user://social_save.json"
 const MAX_LOBBY_SIZE: int = 4
@@ -22,20 +22,21 @@ var persistence_enabled: bool = true
 
 var player_username: String = "Pinguino"
 var player_tag: String = "#SPL1C3P"
-var player_trophies: int = 2805
-var best_trophies: int = 2940
-var wins_survival: int = 42
-var matches_played: int = 87
-var total_kills: int = 314
-var parts_stolen: int = 628
-var abomination_count: int = 19
+# A brand-new guest starts from zero: level 1 of the pass, no trophies, a small wallet.
+var player_trophies: int = 0
+var best_trophies: int = 0
+var wins_survival: int = 0
+var matches_played: int = 0
+var total_kills: int = 0
+var parts_stolen: int = 0
+var abomination_count: int = 0
 
 var season_number: int = 1
-var season_level: int = 34
-var season_xp: int = 435
-var season_xp_max: int = 900
+var season_level: int = 1
+var season_xp: int = 0
+var season_xp_max: int = EconomyCatalog.SEASON_XP_PER_LEVEL
 var has_premium_pass: bool = false
-var claimed_free_tiers: Array[int] = [31, 32]
+var claimed_free_tiers: Array[int] = []
 var claimed_paid_tiers: Array[int] = []
 var selected_mode: String = "survival" # "survival" | "frenzy"
 
@@ -60,7 +61,20 @@ var lobby_members: Array[Dictionary] = []
 var pending_invites: Dictionary = {} # player_id -> remaining_sec
 
 var tasks: Array[Dictionary] = []
-var unlocked_colors: Array[Color] = [Color.WHITE, Color(0.42, 0.31, 0.96), Color(0.95, 0.28, 0.28)]
+var unlocked_colors: Array[Color] = [Color("#FFFFFF"), Color("#6B4FF5"), Color("#F24747")]
+## Signature colour (EconomyCatalog.COLORS id) and the starting parts picked in Aspetto.
+var equipped_color_id: String = "bianco"
+var loadout: Dictionary = {
+	PartData.Slot.HEAD: &"base_head",
+	PartData.Slot.ARMS: &"base_fist",
+	PartData.Slot.LEGS: &"base_boots",
+	PartData.Slot.CORE: &"base_core",
+}
+
+# --- Guest account. A backend (Firebase is the candidate) will link it to Google or Apple. ---
+var guest_id: String = ""
+var linked_provider: String = "" # "" | "google" | "apple"
+var linked_display: String = ""
 
 const DIRECTORY_PLAYERS: Array[Dictionary] = [
 	{ "id": "u_kira", "username": "KiraVortex", "trophies": 3120, "status": "online", "is_bot": false, "color_hex": "#6B4EFF" },
@@ -648,9 +662,49 @@ func claim_task(task_id: String) -> int:
 
 func is_color_unlocked(col: Color) -> bool:
 	for c: Color in unlocked_colors:
-		if c.is_equal_approx(col):
+		if EconomyCatalog.colors_match(c, col):
 			return true
 	return false
+
+func is_color_id_unlocked(color_id: String) -> bool:
+	return is_color_unlocked(Color(str(EconomyCatalog.get_color(color_id)["hex"])))
+
+func get_equipped_color() -> Color:
+	return Color(str(EconomyCatalog.get_color(equipped_color_id)["hex"]))
+
+func equip_color(color_id: String) -> bool:
+	if color_id == equipped_color_id or str(EconomyCatalog.get_color(color_id)["id"]) != color_id:
+		return false
+	if not is_color_id_unlocked(color_id):
+		return false
+	equipped_color_id = color_id
+	inventory_changed.emit()
+	save_state()
+	return true
+
+## Picks the starting part for a slot. Parts are free gameplay choices, not items to own.
+func set_loadout_part(slot: int, part_id: StringName) -> bool:
+	var pdata: PartData = PartCatalog.get_part(part_id)
+	if pdata == null or int(pdata.slot) != slot or loadout.get(slot, &"") == part_id:
+		return false
+	loadout[slot] = part_id
+	inventory_changed.emit()
+	save_state()
+	return true
+
+## Stable id for this device's guest profile; the backend will key the account on it.
+func ensure_guest_id() -> String:
+	if guest_id == "":
+		var rng := RandomNumberGenerator.new()
+		rng.randomize()
+		guest_id = "G-%08X" % rng.randi()
+	return guest_id
+
+func set_linked_account(provider: String, display: String) -> void:
+	linked_provider = provider
+	linked_display = display
+	profile_changed.emit()
+	save_state()
 
 func unlock_color(col: Color) -> bool:
 	if is_color_unlocked(col):
@@ -692,7 +746,18 @@ func capture_state() -> Dictionary:
 		"shop_day": shop_day,
 		"shop_purchased": shop_purchased.duplicate(),
 		"shop_free_claimed": shop_free_claimed.duplicate(),
+		"equipped_color_id": equipped_color_id,
+		"loadout": _loadout_to_save(),
+		"guest_id": guest_id,
+		"linked_provider": linked_provider,
+		"linked_display": linked_display,
 	}
+
+func _loadout_to_save() -> Dictionary:
+	var out: Dictionary = {}
+	for slot: Variant in loadout.keys():
+		out[str(int(slot))] = str(loadout[slot])
+	return out
 
 ## Brings an older save up to the current version, one step at a time.
 static func migrate_state(data: Dictionary) -> Dictionary:
@@ -777,6 +842,21 @@ func apply_state(raw: Dictionary) -> bool:
 		for v: Variant in data["shop_free_claimed"]:
 			shop_free_claimed.append(str(v))
 	season_level = clampi(season_level, 1, EconomyCatalog.SEASON_TIER_COUNT)
+	equipped_color_id = str(data.get("equipped_color_id", equipped_color_id))
+	if str(EconomyCatalog.get_color(equipped_color_id)["id"]) != equipped_color_id or not is_color_id_unlocked(equipped_color_id):
+		equipped_color_id = "bianco"
+	if data.get("loadout") is Dictionary:
+		var saved: Dictionary = data["loadout"]
+		for key: Variant in saved.keys():
+			var slot: int = int(str(key))
+			var pdata: PartData = PartCatalog.get_part(StringName(str(saved[key])))
+			if pdata != null and int(pdata.slot) == slot:
+				loadout[slot] = StringName(str(saved[key]))
+	guest_id = str(data.get("guest_id", guest_id))
+	linked_provider = str(data.get("linked_provider", linked_provider))
+	if not ["", "google", "apple"].has(linked_provider):
+		linked_provider = ""
+	linked_display = str(data.get("linked_display", linked_display))
 	return true
 
 func save_state() -> void:

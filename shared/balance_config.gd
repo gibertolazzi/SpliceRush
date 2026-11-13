@@ -76,10 +76,10 @@ extends Resource
 @export var reward_xp_abomination: int = 60
 @export var reward_xp_podium: int = 80
 @export var reward_xp_win: int = 150
-@export var reward_coins_match: int = 5
-@export var reward_coins_per_kill: int = 2
-@export var reward_coins_podium: int = 10
-@export var reward_coins_win: int = 25
+@export var reward_coins_match: int = 4
+@export var reward_coins_per_kill: int = 1
+@export var reward_coins_podium: int = 8
+@export var reward_coins_win: int = 15
 
 @export_group("Input & Camera")
 @export var joystick_deadzone: float = 0.16
